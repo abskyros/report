@@ -156,7 +156,7 @@ def extract_pdf_data(pdf_bytes: bytes) -> dict:
     return result
 
 # ─────────────────────────────────────────────────────────────────────────────
-# EMAIL — φιλτράρει με subject για ταχύτητα
+# EMAIL
 # ─────────────────────────────────────────────────────────────────────────────
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -164,7 +164,8 @@ def fetch_reports(n_emails: int) -> list:
     results = []
     try:
         with MailBox('imap.gmail.com').login(EMAIL_USER, EMAIL_PASS) as mailbox:
-            messages = list(mailbox.fetch(AND(subject=EMAIL_SUBJECT), limit=n_emails, reverse=True))
+            # ΠΡΟΣΟΧΗ: Προσθήκη charset='utf8' για να υποστηρίζονται τα ελληνικά στο Subject
+            messages = list(mailbox.fetch(AND(subject=EMAIL_SUBJECT), limit=n_emails, reverse=True, charset='utf8'))
             for msg in messages:
                 for att in msg.attachments:
                     if att.filename.lower().endswith('.pdf'):
@@ -316,7 +317,7 @@ with tab_week:
     t_py_w = py_w['_val'].sum()
     if t_py_w > 0:
         d_eur, d_pct = fmt_delta(total_w, t_py_w)
-        st.caption(f"📊 Ίδια εβδομάδα πέρσι: **{fmt_euro(t_py_w)}**  |  Διαφορά: **{d_eur}** ({d_pct})")
+        st.caption(f"📊 Ίδια εβδομάδα πέρσι: **{fmt_euro(t_py_w)}** |  Διαφορά: **{d_eur}** ({d_pct})")
 
     st.dataframe(
         wdf[['Ημέρα','Ημ/νία','Πωλήσεις','Πελάτες','Μ.Ό. Καλαθιού']],
@@ -355,7 +356,7 @@ with tab_month:
         py_m = history[history['date'].apply(lambda d: d.month==sel_month and d.year==sel_year-1)]
         if not py_m.empty:
             d_eur, d_pct = fmt_delta(total_m, py_m['netday'].sum())
-            st.caption(f"📊 {MONTHS_GR[sel_month-1]} {sel_year-1}: **{fmt_euro(py_m['netday'].sum())}**  |  "
+            st.caption(f"📊 {MONTHS_GR[sel_month-1]} {sel_year-1}: **{fmt_euro(py_m['netday'].sum())}** |  "
                        f"Διαφορά: **{d_eur}** ({d_pct})")
 
         st.divider()
@@ -401,7 +402,7 @@ with tab_year:
         py_y = history[history['date'].apply(lambda d: d.year == sel_year_y - 1)]
         if not py_y.empty:
             d_eur, d_pct = fmt_delta(total_y, py_y['netday'].sum())
-            st.caption(f"📊 {sel_year_y-1}: **{fmt_euro(py_y['netday'].sum())}**  |  "
+            st.caption(f"📊 {sel_year_y-1}: **{fmt_euro(py_y['netday'].sum())}** |  "
                        f"Διαφορά: **{d_eur}** ({d_pct})")
 
         st.divider()
