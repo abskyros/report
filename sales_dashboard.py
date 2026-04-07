@@ -13,7 +13,6 @@ from datetime import datetime, timedelta, date
 # ─────────────────────────────────────────────────────────────────────────────
 EMAIL_USER    = "ftoulisgm@gmail.com"
 EMAIL_PASS    = st.secrets["EMAIL_PASSWORD"]
-EMAIL_SUBJECT = "ΑΒ ΣΚΥΡΟΣ"
 
 HISTORY_FILE  = "sales_history.csv"   # ημερήσιο ιστορικό
 HOURLY_FILE   = "hourly_history.csv"  # ωριαίο ιστορικό
@@ -47,7 +46,8 @@ st.markdown("""
 def load_history() -> pd.DataFrame:
     if os.path.exists(HISTORY_FILE):
         df = pd.read_csv(HISTORY_FILE)
-        df['date'] = pd.to_datetime(df['date']).dt.date
+        if not df.empty:
+            df['date'] = pd.to_datetime(df['date']).dt.date
         return df
     return pd.DataFrame(columns=['date','netday','grossal','customers','items','avg_basket'])
 
@@ -68,7 +68,8 @@ def upsert_daily(record: dict):
 def load_hourly() -> pd.DataFrame:
     if os.path.exists(HOURLY_FILE):
         df = pd.read_csv(HOURLY_FILE)
-        df['date'] = pd.to_datetime(df['date']).dt.date
+        if not df.empty:
+            df['date'] = pd.to_datetime(df['date']).dt.date
         return df
     return pd.DataFrame(columns=['date','hour','sales','customers','items'])
 
@@ -77,13 +78,15 @@ def save_hourly(df: pd.DataFrame):
 
 def upsert_hourly(record_date: date, hourly_rows: list[dict]):
     df = load_hourly()
-    df = df[df['date'] != record_date]          
+    if not df.empty:
+        df = df[df['date'] != record_date]          
     new_rows = pd.DataFrame([{**r, 'date': record_date} for r in hourly_rows])
     df = pd.concat([df, new_rows], ignore_index=True)
     df = df.sort_values(['date','hour']).reset_index(drop=True)
     save_hourly(df)
 
 def get_history_value(df: pd.DataFrame, target_date: date, col: str):
+    if df.empty: return None
     mask = df['date'] == target_date
     if mask.any():
         val = df.loc[mask, col].values[0]
@@ -125,24 +128,31 @@ def extract_pdf_data(pdf_bytes: bytes) -> dict:
         for match in hourly_pattern:
             h_str, s_str, _, c_str = match
             result['hourly'].append({'hour': int(h_str.split(':')[0]), 'sales': parse_number(s_str), 'customers': int(c_str)})
-    except Exception as e: st.error(f"Error: {e}")
+    except Exception as e: st.error(f"Error PDF: {e}")
     return result
 
 def fetch_latest_report(n_emails: int = 30):
     results = []
     try:
         with MailBox('imap.gmail.com').login(EMAIL_USER, EMAIL_PASS) as mailbox:
-            # Τραβάμε τα τελευταία 200 emails και το φιλτράρισμα στα ελληνικά γίνεται εδώ με ασφάλεια
-            for msg in mailbox.fetch(limit=200, reverse=True):
-                if EMAIL_SUBJECT in msg.subject:
-                    for att in msg.attachments:
-                        if att.filename.lower().endswith('.pdf'):
-                            data = extract_pdf_data(att.payload)
-                            if data['date'] and data['netday']:
-                                results.append(data)
-                                break
+            # Ελέγχουμε τα τελευταία 150 emails (αγνοούμε το θέμα για να μη χάσουμε κανένα)
+            for msg in mailbox.fetch(limit=150, reverse=True):
+                if not msg.attachments:
+                    continue # Πάμε στο επόμενο αν δεν έχει συνημμένο
+                    
+                for att in msg.attachments:
+                    if att.filename.lower().endswith('.pdf'):
+                        data = extract_pdf_data(att.payload)
+                        
+                        # Αν το PDF δεν γράφει ημερομηνία μέσα, παίρνουμε την ημερομηνία του email
+                        if data['date'] is None:
+                            data['date'] = msg.date.date()
+                            
+                        # Αν βρήκαμε πωλήσεις (netday), το κρατάμε!
+                        if data['netday'] is not None:
+                            results.append(data)
+                            break # Βρήκαμε δεδομένα, πάμε στο επόμενο email
                 
-                # Αν φτάσαμε τον αριθμό εγγράφων που θέλαμε, σταματάμε
                 if len(results) >= n_emails:
                     break
     except Exception as e: st.error(f"Email Error: {e}")
@@ -154,17 +164,19 @@ def fetch_latest_report(n_emails: int = 30):
 
 st.title("🛒 AB ΣΚΥΡΟΣ Dashboard")
 
-with st.expander("⚙️ Ενημέρωση Δεδομένων"):
-    n_fetch = st.selectbox("Πόσα emails να ελέγξω;", [7, 14, 30, 60], index=1)
+with st.expander("⚙️ Ενημέρωση Δεδομένων", expanded=True):
+    n_fetch = st.selectbox("Πόσες ημέρες να ελέγξω;", [7, 14, 30, 60], index=1)
     if st.button("📥 Λήψη από Email"):
-        with st.spinner("Γίνεται λήψη..."):
+        with st.spinner("Γίνεται σάρωση στα emails..."):
             fetched = fetch_latest_report(n_fetch)
             if fetched:
                 for d in fetched:
                     upsert_daily({'date': d['date'], 'netday': d['netday'], 'customers': d['customers'], 'avg_basket': d['avg_basket']})
                     if d['hourly']: upsert_hourly(d['date'], d['hourly'])
-                st.success(f"Ενημερώθηκαν {len(fetched)} ημέρες!")
+                st.success(f"Ενημερώθηκαν {len(fetched)} ημέρες επιτυχώς!")
                 st.rerun()
+            else:
+                st.warning("Σαρώθηκαν τα emails, αλλά δεν βρέθηκαν PDF με δεδομένα πωλήσεων.")
 
 history = load_history()
 hourly = load_hourly()
@@ -182,8 +194,8 @@ with tab_day:
     r = history[history['date'] == sel_date].iloc[0]
     c1, c2, c3 = st.columns(3)
     c1.metric("💰 Πωλήσεις", f"{r['netday']:,.2f}€")
-    c2.metric("👥 Πελάτες", int(r['customers']))
-    c3.metric("🛒 Μ.Ο.", f"{r['avg_basket']:,.2f}€")
+    c2.metric("👥 Πελάτες", int(r['customers']) if pd.notna(r['customers']) else 0)
+    c3.metric("🛒 Μ.Ο.", f"{r['avg_basket']:,.2f}€" if pd.notna(r['avg_basket']) else "0.00€")
 
     # Σύγκριση με πέρσι
     last_year_date = date(sel_date.year - 1, sel_date.month, sel_date.day)
@@ -208,29 +220,32 @@ with tab_month:
     st.line_chart(m_data.set_index('date')['netday'])
 
 with tab_hourly:
-    h_dates = sorted(hourly['date'].unique(), reverse=True)
-    sel_h_date = st.selectbox("Ώρες για:", h_dates, key="h_date_sel")
-    h_df = hourly[hourly['date'] == sel_h_date]
-    if not h_df.empty:
-        st.bar_chart(h_df.set_index('hour')['sales'])
-        st.dataframe(h_df[['hour', 'sales', 'customers']], use_container_width=True, hide_index=True)
+    if not hourly.empty:
+        h_dates = sorted(hourly['date'].unique(), reverse=True)
+        sel_h_date = st.selectbox("Ώρες για:", h_dates, key="h_date_sel")
+        h_df = hourly[hourly['date'] == sel_h_date]
+        if not h_df.empty:
+            st.bar_chart(h_df.set_index('hour')['sales'])
+            st.dataframe(h_df[['hour', 'sales', 'customers']], use_container_width=True, hide_index=True)
 
-        # Σύγκριση ίδιας μέρας χθες
-        prev_h_date = sel_h_date - timedelta(days=1)
-        prev_h_df   = hourly[hourly['date'] == prev_h_date]
-        if not prev_h_df.empty:
-            st.divider()
-            st.markdown(f"**Σύγκριση με {prev_h_date.strftime('%d/%m/%Y')}:**")
-            merged = h_df[['hour','sales']].merge(
-                prev_h_df[['hour','sales']].rename(columns={'sales':'sales_prev'}),
-                on='hour', how='outer'
-            ).fillna(0).sort_values('hour')
-            merged['Ώρα']     = merged['hour'].apply(lambda x: f"{x:02d}:00")
-            merged['Σήμερα']  = merged['sales'].map(lambda x: f"{x:,.2f} €")
-            merged['Χθες']    = merged['sales_prev'].map(lambda x: f"{x:,.2f} €")
-            merged['Δ%']      = merged.apply(
-                lambda r: f"{((r['sales']-r['sales_prev'])/r['sales_prev']*100):+.1f}%"
-                if r['sales_prev'] > 0 else "—", axis=1
-            )
-            st.dataframe(merged[['Ώρα','Σήμερα','Χθες','Δ%']],
-                         use_container_width=True, hide_index=True)
+            # Σύγκριση ίδιας μέρας χθες
+            prev_h_date = sel_h_date - timedelta(days=1)
+            prev_h_df   = hourly[hourly['date'] == prev_h_date]
+            if not prev_h_df.empty:
+                st.divider()
+                st.markdown(f"**Σύγκριση με {prev_h_date.strftime('%d/%m/%Y')}:**")
+                merged = h_df[['hour','sales']].merge(
+                    prev_h_df[['hour','sales']].rename(columns={'sales':'sales_prev'}),
+                    on='hour', how='outer'
+                ).fillna(0).sort_values('hour')
+                merged['Ώρα']     = merged['hour'].apply(lambda x: f"{x:02d}:00")
+                merged['Σήμερα']  = merged['sales'].map(lambda x: f"{x:,.2f} €")
+                merged['Χθες']    = merged['sales_prev'].map(lambda x: f"{x:,.2f} €")
+                merged['Δ%']      = merged.apply(
+                    lambda r: f"{((r['sales']-r['sales_prev'])/r['sales_prev']*100):+.1f}%"
+                    if r['sales_prev'] > 0 else "—", axis=1
+                )
+                st.dataframe(merged[['Ώρα','Σήμερα','Χθες','Δ%']],
+                             use_container_width=True, hide_index=True)
+    else:
+        st.info("Δεν υπάρχουν ωριαία δεδομένα ακόμα.")
