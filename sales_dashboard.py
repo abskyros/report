@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, date
 # ΡΥΘΜΙΣΕΙΣ
 # ─────────────────────────────────────────────────────────────────────────────
 EMAIL_USER    = "ftoulisgm@gmail.com"
-EMAIL_PASS    = st.secrets["EMAIL_PASSWORD"]
+EMAIL_PASS    = st.secrets["bkrvmuqxysymqwbf"]
 
 HISTORY_FILE  = "sales_history.csv"   # ημερήσιο ιστορικό
 HOURLY_FILE   = "hourly_history.csv"  # ωριαίο ιστορικό
