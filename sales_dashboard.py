@@ -159,13 +159,20 @@ def extract_pdf_data(pdf_bytes: bytes) -> dict:
 # EMAIL
 # ─────────────────────────────────────────────────────────────────────────────
 
+# --- ΔΙΟΡΘΩΜΕΝΟ ΤΜΗΜΑ ΣΤΟ sales_dashboard.py ---
+
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_reports(n_emails: int) -> list:
     results = []
     try:
         with MailBox('imap.gmail.com').login(EMAIL_USER, EMAIL_PASS) as mailbox:
-            # ΠΡΟΣΟΧΗ: Προσθήκη charset='utf8' για να υποστηρίζονται τα ελληνικά στο Subject
-            messages = list(mailbox.fetch(AND(subject=EMAIL_SUBJECT), limit=n_emails, reverse=True, charset='utf8'))
+            # Χρησιμοποιούμε απευθείας string για το search προκειμένου να αποφύγουμε το σφάλμα UID command
+            # Η μορφή 'SUBJECT "..." ' είναι η πιο συμβατή με το Gmail για ελληνικά
+            search_criteria = f'SUBJECT "{EMAIL_SUBJECT}"'
+            
+            # Προσθήκη charset='utf-8' για σωστή επικοινωνία με το Gmail
+            messages = list(mailbox.fetch(search_criteria, limit=n_emails, reverse=True, charset='utf-8'))
+            
             for msg in messages:
                 for att in msg.attachments:
                     if att.filename.lower().endswith('.pdf'):
