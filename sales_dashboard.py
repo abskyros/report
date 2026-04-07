@@ -5,13 +5,13 @@ import os
 import re
 import json
 import pdfplumber
-from imap_tools import MailBox, AND
+from imap_tools import MailBox
 from datetime import datetime, timedelta, date
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ΡΥΘΜΙΣΕΙΣ
 # ─────────────────────────────────────────────────────────────────────────────
-EMAIL_USER    = "ftoulisgm@gmail.com"  # <--- ΤΟ ΔΙΟΡΘΩΣΑΜΕ ΕΔΩ
+EMAIL_USER    = "ftoulisgm@gmail.com"
 EMAIL_PASS    = st.secrets["EMAIL_PASSWORD"]
 EMAIL_SUBJECT = "ΑΒ ΣΚΥΡΟΣ"
 
@@ -132,13 +132,19 @@ def fetch_latest_report(n_emails: int = 30):
     results = []
     try:
         with MailBox('imap.gmail.com').login(EMAIL_USER, EMAIL_PASS) as mailbox:
-            for msg in mailbox.fetch(AND(subject=EMAIL_SUBJECT), limit=n_emails, reverse=True):
-                for att in msg.attachments:
-                    if att.filename.lower().endswith('.pdf'):
-                        data = extract_pdf_data(att.payload)
-                        if data['date'] and data['netday']:
-                            results.append(data)
-                            break
+            # Τραβάμε τα τελευταία 200 emails και το φιλτράρισμα στα ελληνικά γίνεται εδώ με ασφάλεια
+            for msg in mailbox.fetch(limit=200, reverse=True):
+                if EMAIL_SUBJECT in msg.subject:
+                    for att in msg.attachments:
+                        if att.filename.lower().endswith('.pdf'):
+                            data = extract_pdf_data(att.payload)
+                            if data['date'] and data['netday']:
+                                results.append(data)
+                                break
+                
+                # Αν φτάσαμε τον αριθμό εγγράφων που θέλαμε, σταματάμε
+                if len(results) >= n_emails:
+                    break
     except Exception as e: st.error(f"Email Error: {e}")
     return results
 
