@@ -140,27 +140,50 @@ def extract_pdf_data(pdf_bytes: bytes) -> dict:
 # EMAIL (Η ΛΥΣΗ ΧΩΡΙΣ SEARCH)
 # ─────────────────────────────────────────────────────────────────────────────
 
+import unicodedata
+
+def _norm(s: str) -> str:
+    # αφαιρεί τόνους και κάνει uppercase για σίγουρο matching
+    s = unicodedata.normalize('NFD', s or '')
+    s = ''.join(c for c in s if unicodedata.category(c) != 'Mn')
+    return s.upper()
+
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_reports(limit: int) -> list:
     results = []
+    target = _norm(EMAIL_SUBJECT)
+    # Ψάχνουμε σε ΟΛΑ τα mail, όχι μόνο στο Inbox
+    folders_to_try = ['[Gmail]/All Mail', '[Gmail]/Όλα τα μηνύματα', 'INBOX']
     try:
-        # Σύνδεση χωρίς κριτήρια αναζήτησης για αποφυγή σφαλμάτων κωδικοποίησης
         with MailBox('imap.gmail.com').login(EMAIL_USER, EMAIL_PASS) as mailbox:
-            # Παίρνουμε τα τελευταία Χ emails από το Inbox
-            for msg in mailbox.fetch(limit=limit, reverse=True):
-                # Φιλτράρισμα τίτλου στην Python (υποστηρίζει ελληνικά τέλεια)
-                if EMAIL_SUBJECT.upper() in msg.subject.upper():
+            chosen = None
+            for f in folders_to_try:
+                try:
+                    mailbox.folder.set(f)
+                    chosen = f
+                    break
+                except Exception:
+                    continue
+            st.caption(f"📂 Φάκελος: {chosen}")
+
+            checked = 0
+            matched = 0
+            for msg in mailbox.fetch(limit=limit, reverse=True, mark_seen=False):
+                checked += 1
+                if target in _norm(msg.subject):
+                    matched += 1
                     for att in msg.attachments:
                         if att.filename.lower().endswith('.pdf'):
                             data = extract_pdf_data(att.payload)
-                            if data['date'] is None: data['date'] = msg.date.date()
+                            if data['date'] is None:
+                                data['date'] = msg.date.date()
                             if data['netday'] is not None:
                                 results.append(data)
                                 break
+            st.caption(f"🔎 Ελέγχθηκαν {checked} emails, ταίριαξαν {matched} με '{EMAIL_SUBJECT}'")
     except Exception as e:
         st.error(f"Email Error: {e}")
     return results
-
 # ─────────────────────────────────────────────────────────────────────────────
 # UI
 # ─────────────────────────────────────────────────────────────────────────────
@@ -170,7 +193,7 @@ st.title("🛒 ΑΒ ΣΚΥΡΟΣ – Dashboard")
 with st.expander("⚙️ Ενημέρωση Δεδομένων", expanded=False):
     c1, c2 = st.columns([3,1])
     with c1:
-        n_check = st.number_input("Έλεγχος τελευταίων emails:", 10, 500, 50)
+        n_check = st.number_input("Έλεγχος τελευταίων emails:", 10, 1000, 200)
     with c2:
         st.write(""); st.write("")
         if st.button("📥 Λήψη", use_container_width=True):
