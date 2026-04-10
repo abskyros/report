@@ -152,37 +152,49 @@ def _norm(s: str) -> str:
 def fetch_reports(limit: int) -> list:
     results = []
     target = _norm(EMAIL_SUBJECT)
-    # Ψάχνουμε σε ΟΛΑ τα mail, όχι μόνο στο Inbox
     folders_to_try = ['[Gmail]/All Mail', '[Gmail]/Όλα τα μηνύματα', 'INBOX']
+    debug_texts = []
     try:
         with MailBox('imap.gmail.com').login(EMAIL_USER, EMAIL_PASS) as mailbox:
             chosen = None
             for f in folders_to_try:
                 try:
-                    mailbox.folder.set(f)
-                    chosen = f
-                    break
+                    mailbox.folder.set(f); chosen = f; break
                 except Exception:
                     continue
             st.caption(f"📂 Φάκελος: {chosen}")
 
-            checked = 0
-            matched = 0
+            checked = matched = pdfs_found = 0
             for msg in mailbox.fetch(limit=limit, reverse=True, mark_seen=False):
                 checked += 1
                 if target in _norm(msg.subject):
                     matched += 1
                     for att in msg.attachments:
                         if att.filename.lower().endswith('.pdf'):
+                            pdfs_found += 1
+                            # DEBUG: πάρε το ωμό κείμενο
+                            try:
+                                with pdfplumber.open(io.BytesIO(att.payload)) as pdf:
+                                    raw = "\n".join(p.extract_text() or "" for p in pdf.pages)
+                                debug_texts.append((msg.date, att.filename, raw))
+                            except Exception as e:
+                                debug_texts.append((msg.date, att.filename, f"ERROR: {e}"))
+
                             data = extract_pdf_data(att.payload)
                             if data['date'] is None:
                                 data['date'] = msg.date.date()
                             if data['netday'] is not None:
                                 results.append(data)
                                 break
-            st.caption(f"🔎 Ελέγχθηκαν {checked} emails, ταίριαξαν {matched} με '{EMAIL_SUBJECT}'")
+            st.caption(f"🔎 Ελέγχθηκαν {checked}, ταίριαξαν {matched}, PDFs {pdfs_found}")
     except Exception as e:
         st.error(f"Email Error: {e}")
+
+    # Εμφάνισε το ωμό κείμενο του πρώτου PDF
+    if debug_texts:
+        d, fn, raw = debug_texts[0]
+        with st.expander(f"🔍 DEBUG: Περιεχόμενο PDF ({fn})", expanded=True):
+            st.text(raw[:3000] if raw else "(κενό)")
     return results
 # ─────────────────────────────────────────────────────────────────────────────
 # UI
