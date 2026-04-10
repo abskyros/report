@@ -114,24 +114,76 @@ def extract_pdf_data(pdf_bytes: bytes) -> dict:
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             full_text = "\n".join(p.extract_text() or "" for p in pdf.pages)
 
-        m_date = re.search(r'For\s+(\d{2}/\d{2}/\d{4})', full_text)
-        if m_date: result['date'] = datetime.strptime(m_date.group(1), "%d/%m/%Y").date()
+        lines = [l.strip() for l in full_text.split('\n') if l.strip()]
 
-        m_net = re.search(r'NetDaySalDis\s+([\d\.,]+)', full_text)
-        if m_net: result['netday'] = parse_number(m_net.group(1))
+        # --- Ημερομηνία ---
+        for line in lines:
+            m = re.search(r'(\d{2}/\d{2}/\d{4})', line)
+            if m:
+                try:
+                    result['date'] = datetime.strptime(m.group(1), "%d/%m/%Y").date()
+                    break
+                except Exception:
+                    pass
 
-        m_cus = re.search(r'NumOfCus\s+([\d\.,]+)', full_text)
-        if m_cus: result['customers'] = int(parse_number(m_cus.group(1)))
+        # --- Summary: positional matching (labels column → values column) ---
+        summary_labels = ['NetDaySalDis', 'NonMercDep', 'TotSal', 'NumOfCus',
+                          'AvgSalCus', 'NumItmSold', 'AvgItmPerCus', 'AvgItmPric']
 
-        m_avg = re.search(r'AvgSalCus\s+([\d\.,]+)', full_text)
-        if m_avg: result['avg_basket'] = parse_number(m_avg.group(1))
+        found_labels = []  # [(key, line_index), ...]
+        for i, line in enumerate(lines):
+            for k in summary_labels:
+                if line == k or line.startswith(k + ' '):
+                    found_labels.append((k, i))
+                    break
 
-        # Ωριαία δεδομένα
-        pattern = r'(\d{2}):\d{2}\s*-\s*\d{2}:\d{2}\s+([\d\.,]+)\s*€?\s+[\d\.,]+\s+(\d+)'
-        for h_str, s_str, c_str in re.findall(pattern, full_text):
-            s_val = parse_number(s_str)
-            if s_val > 0:
-                result['hourly'].append({'hour': int(h_str), 'sales': s_val, 'customers': int(parse_number(c_str))})
+        if found_labels:
+            last_label_line = max(li for _, li in found_labels)
+            # Αριθμητικές γραμμές: 354, 33,98, 12.029,56, 5.078,00, κλπ.
+            num_re = re.compile(r'^-?\d{1,3}(?:\.\d{3})*(?:,\d+)?$|^-?\d+$')
+            value_lines = []
+            for i in range(last_label_line + 1, len(lines)):
+                if num_re.match(lines[i]):
+                    value_lines.append(lines[i])
+                    if len(value_lines) >= len(found_labels):
+                        break
+
+            mapping = dict(zip([k for k, _ in found_labels], value_lines))
+
+            if 'NetDaySalDis' in mapping:
+                result['netday'] = parse_number(mapping['NetDaySalDis'])
+            if 'NumOfCus' in mapping:
+                try:
+                    result['customers'] = int(parse_number(mapping['NumOfCus']))
+                except Exception:
+                    pass
+            if 'AvgSalCus' in mapping:
+                result['avg_basket'] = parse_number(mapping['AvgSalCus'])
+
+        # --- Ωριαία: ίδια λογική (times column → sales column) ---
+        time_re = re.compile(r'^(\d{2}):\d{2}\s*-\s*\d{2}:\d{2}$')
+        time_hours = []
+        last_time_idx = -1
+        for i, line in enumerate(lines):
+            m = time_re.match(line)
+            if m:
+                time_hours.append(int(m.group(1)))
+                last_time_idx = i
+
+        if time_hours and last_time_idx >= 0:
+            sales_re = re.compile(r'^([\d\.,]+)\s*€$')
+            sales_values = []
+            for i in range(last_time_idx + 1, len(lines)):
+                m = sales_re.match(lines[i])
+                if m:
+                    sales_values.append(parse_number(m.group(1)))
+                    if len(sales_values) >= len(time_hours):
+                        break
+
+            for h, s in zip(time_hours, sales_values):
+                if s > 0:
+                    result['hourly'].append({'hour': h, 'sales': s, 'customers': 0})
+
     except Exception as e:
         st.warning(f"PDF Error: {e}")
     return result
