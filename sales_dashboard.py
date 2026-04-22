@@ -13,7 +13,7 @@ import traceback
 # ΡΥΘΜΙΣΕΙΣ
 # ─────────────────────────────────────────────────────────────────────────────
 EMAIL_USER    = "ftoulisgm@gmail.com"
-EMAIL_PASS    = st.secrets["EMAIL_PASSWORD"]
+EMAIL_PASS    = st.secrets["bkrvmuqxysymqwbf"]
 EMAIL_SUBJECT = "ΑΒ ΣΚΥΡΟΣ"
 
 HISTORY_FILE  = "sales_history.csv"
