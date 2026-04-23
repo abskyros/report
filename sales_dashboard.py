@@ -99,10 +99,11 @@ with col_sync:
                 with MailBox('imap.gmail.com').login(EMAIL_USER, EMAIL_PASS) as mailbox:
                     df = load_data()
                     found = 0
-                    # Χρήση AND για ταυτόχρονο φιλτράρισμα Αποστολέα και Θέματος
+                    # Φίλτρο με αποστολέα ΚΑΙ θέμα
                     criteria = AND(from_=EMAIL_FROM, subject=EMAIL_SUBJECT)
                     
-                    for msg in mailbox.fetch(criteria, limit=20, reverse=True):
+                    # ΠΡΟΣΘΗΚΗ charset='UTF8' ΕΔΩ για να διαβάζει τα Ελληνικά του θέματος!
+                    for msg in mailbox.fetch(criteria, limit=20, reverse=True, charset='UTF8'):
                         d = msg.date.date()
                         for att in msg.attachments:
                             if att.filename.lower().endswith('.pdf'):
@@ -119,7 +120,7 @@ with col_sync:
                 st.toast(f"Ενημερώθηκαν {found} αναφορές!", icon="✅")
                 st.rerun()
             except Exception as e:
-                st.error(f"Σφάλμα σύνδεσης: {e}")
+                st.error(f"Σφάλμα σύνδεσης/αναζήτησης: {e}")
 
 with col_filter:
     period = st.selectbox("Περίοδος:", ["Τελευταίες 7 Ημέρες", "Τρέχων Μήνας", "Όλο το Έτος"], label_visibility="collapsed")
