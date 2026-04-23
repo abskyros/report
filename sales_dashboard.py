@@ -4,12 +4,12 @@ import io
 import os
 import re
 import json
-from imap_tools import MailBox
+from imap_tools import MailBox, AND
 from datetime import datetime, date, timedelta
 import pytesseract
 from pdf2image import convert_from_bytes
 
-# Ρυθμίσεις εμφάνισης - Mobile First
+# Ρυθμίσεις εμφάνισης - Καθαρό UI για κινητό
 st.set_page_config(page_title="ΑΒ ΣΚΥΡΟΣ – Dashboard", layout="centered", page_icon="🛒")
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -19,13 +19,14 @@ EMAIL_USER = "ftoulisgm@gmail.com"
 try:
     EMAIL_PASS = st.secrets["EMAIL_PASSWORD"]
 except:
-    EMAIL_PASS = "YOUR_PASSWORD_HERE" # Για τοπική χρήση
+    EMAIL_PASS = "YOUR_PASSWORD_HERE" # Συμπλήρωσε το pass για τοπική δοκιμή
 
 EMAIL_FROM = "abf.skyros@gmail.com"
+EMAIL_SUBJECT = "ΑΒ ΣΚΥΡΟΣ" # Το θέμα που μας βοηθάει στην ταχύτητα
 HISTORY_FILE = "sales_history.csv"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Η ΜΗΧΑΝΗ ΤΟΥ OCR (ΒΕΛΤΙΩΜΕΝΗ)
+# ΣΥΝΑΡΤΗΣΕΙΣ ΕΠΕΞΕΡΓΑΣΙΑΣ (OCR & DATA)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def fmt_euro(val):
@@ -34,13 +35,10 @@ def fmt_euro(val):
 
 def clean_and_parse_num(text):
     if not text: return 0.0
-    # Αφαιρούμε τα πάντα εκτός από ψηφία, κόμμα και τελεία
     clean = re.sub(r'[^\d,\.]', '', text)
     if not clean: return 0.0
-    # Αν έχουμε μορφή 9.102,82
     if '.' in clean and ',' in clean:
         clean = clean.replace('.', '').replace(',', '.')
-    # Αν έχουμε μόνο κόμμα 102,82
     elif ',' in clean:
         clean = clean.replace(',', '.')
     try:
@@ -49,16 +47,13 @@ def clean_and_parse_num(text):
         return 0.0
 
 def extract_all_data(pdf_bytes):
-    """Ενισχυμένη ανάγνωση για σκαναρισμένα PDF"""
     try:
         images = convert_from_bytes(pdf_bytes)
         text = ""
         for img in images:
             text += pytesseract.image_to_string(img, lang='eng+ell')
 
-        # Πιο "έξυπνη" αναζήτηση που αγνοεί αλλαγές γραμμών ανάμεσα στη λέξη και το νούμερο
         def get_value(key, full_text):
-            # Ψάχνει το key και παίρνει το επόμενο group ψηφίων/συμβόλων
             pattern = rf"{key}[\s\n]*[:\-]*[\s\n]*([\d\.,]+)"
             match = re.search(pattern, full_text, re.IGNORECASE | re.DOTALL)
             return clean_and_parse_num(match.group(1)) if match else 0.0
@@ -68,15 +63,13 @@ def extract_all_data(pdf_bytes):
         upt     = get_value("AvgitmPerCus", text)
         aur     = get_value("AvgItmPric", text)
 
-        # Ανάλυση Τμημάτων
         dept_list = []
-        # Pattern: 3 ψηφία κωδικός + Ονομασία (Κεφαλαία Ελληνικά) + Ποσό
         dept_pattern = r"(\d{3})\s+([Α-Ω\s\-\.\/]+)\s+([\d\.,]+)"
         matches = re.findall(dept_pattern, text)
         
         for d_code, d_name, d_net in matches:
             val = clean_and_parse_num(d_net)
-            if val > 1.0: # Αγνοούμε τα πολύ μικρά ποσά/λάθη
+            if val > 1.0:
                 dept_list.append({"name": d_name.strip(), "sales": val})
         
         dept_list = sorted(dept_list, key=lambda x: x['sales'], reverse=True)
@@ -88,7 +81,6 @@ def load_data():
     if os.path.exists(HISTORY_FILE):
         df = pd.read_csv(HISTORY_FILE)
         df['date'] = pd.to_datetime(df['date']).dt.date
-        # Διασφάλιση μοναδικότητας ανά ημερομηνία
         return df.sort_values('date', ascending=False).drop_duplicates(subset=['date'])
     return pd.DataFrame(columns=['date', 'netday', 'customers', 'upt', 'aur', 'depts'])
 
@@ -97,17 +89,20 @@ def load_data():
 # ─────────────────────────────────────────────────────────────────────────────
 st.title("🛒 ΑΒ ΣΚΥΡΟΣ Dashboard")
 
-# Ενότητα Συγχρονισμού (Κορυφή)
+# Πάνελ Ελέγχου στην κορυφή
 col_sync, col_filter = st.columns([1, 1])
 
 with col_sync:
-    if st.button("🔄 Συγχρονισμός (Τελευταία 20)", use_container_width=True, type="primary"):
-        with st.spinner("Γίνεται ανάγνωση..."):
+    if st.button("🔄 Γρήγορος Συγχρονισμός", use_container_width=True, type="primary"):
+        with st.spinner("Αναζήτηση στα email 'ΑΒ ΣΚΥΡΟΣ'..."):
             try:
                 with MailBox('imap.gmail.com').login(EMAIL_USER, EMAIL_PASS) as mailbox:
                     df = load_data()
                     found = 0
-                    for msg in mailbox.fetch(f'FROM "{EMAIL_FROM}"', limit=20, reverse=True):
+                    # Χρήση AND για ταυτόχρονο φιλτράρισμα Αποστολέα και Θέματος
+                    criteria = AND(from_=EMAIL_FROM, subject=EMAIL_SUBJECT)
+                    
+                    for msg in mailbox.fetch(criteria, limit=20, reverse=True):
                         d = msg.date.date()
                         for att in msg.attachments:
                             if att.filename.lower().endswith('.pdf'):
@@ -121,22 +116,22 @@ with col_sync:
                                         df = pd.concat([df, pd.DataFrame([new_row])])
                                     found += 1
                     df.to_csv(HISTORY_FILE, index=False)
-                st.toast(f"Βρέθηκαν {found} αναφορές!", icon="✅")
+                st.toast(f"Ενημερώθηκαν {found} αναφορές!", icon="✅")
                 st.rerun()
             except Exception as e:
-                st.error(f"Σφάλμα: {e}")
+                st.error(f"Σφάλμα σύνδεσης: {e}")
 
 with col_filter:
-    period = st.selectbox("Διάστημα:", ["Τελευταίες 7 Ημέρες", "Τρέχων Μήνας", "Όλο το Έτος"], label_visibility="collapsed")
+    period = st.selectbox("Περίοδος:", ["Τελευταίες 7 Ημέρες", "Τρέχων Μήνας", "Όλο το Έτος"], label_visibility="collapsed")
 
 # Φόρτωση Δεδομένων
 df = load_data()
 
 if df.empty:
-    st.info("Δεν υπάρχουν δεδομένα. Πατήστε 'Συγχρονισμός' για να ξεκινήσουμε.")
+    st.info("Η βάση είναι άδεια. Πατήστε 'Γρήγορος Συγχρονισμός' για να ξεκινήσουμε.")
     st.stop()
 
-# Εφαρμογή Φίλτρου Περιόδου
+# Εφαρμογή Φίλτρου
 today = date.today()
 if "7 Ημέρες" in period:
     mask = df[df['date'] >= (today - timedelta(days=7))]
@@ -145,7 +140,7 @@ elif "Μήνας" in period:
 else:
     mask = df[df['date'].apply(lambda x: x.year == today.year)]
 
-# TABS
+# ΚΥΡΙΩΣ ΠΕΡΙΕΧΟΜΕΝΟ (TABS)
 tab1, tab2, tab3 = st.tabs(["📍 Σήμερα", "🏆 Ρεκόρ", "📑 Ιστορικό"])
 
 # --- TAB 1: ΣΗΜΕΡΑ ---
@@ -166,12 +161,12 @@ with tab1:
     try:
         depts = json.loads(latest['depts'])
         if not depts: 
-            st.write("Δεν βρέθηκαν τμήματα σε αυτή την αναφορά.")
+            st.write("Δεν βρέθηκαν τμήματα.")
         else:
             for i, d in enumerate(depts[:8]):
                 st.write(f"**{i+1}. {d['name']}**: {fmt_euro(d['sales'])}")
     except:
-        st.write("Σφάλμα στην ανάγνωση των τμημάτων.")
+        st.write("Σφάλμα στην ανάγνωση τμημάτων.")
 
 # --- TAB 2: ΡΕΚΟΡ ---
 with tab2:
@@ -179,7 +174,7 @@ with tab2:
         best_sales = mask.loc[mask['netday'].idxmax()]
         best_cus   = mask.loc[mask['customers'].idxmax()]
         
-        st.info(f"Κορυφαίες επιδόσεις: {period}")
+        st.info(f"Κορυφαίες επιδόσεις περιόδου: {period}")
         
         r1, r2 = st.columns(2)
         with r1:
@@ -190,6 +185,20 @@ with tab2:
             st.markdown("**👥 Πελάτες**")
             st.markdown(f"### {int(best_cus['customers'])}")
             st.caption(f"Στις {best_cus['date'].strftime('%d/%m')}")
+            
+        # Εύρεση του "Top Τμήματος" περιόδου
+        dept_totals = {}
+        for row in mask['depts']:
+            try:
+                for d in json.loads(row):
+                    dept_totals[d['name']] = dept_totals.get(d['name'], 0) + d['sales']
+            except: continue
+        
+        if dept_totals:
+            top_d = max(dept_totals, key=dept_totals.get)
+            st.divider()
+            st.markdown(f"📦 **Κορυφαίο Τμήμα Περιόδου:** {top_d}")
+            st.markdown(f"Συνολικός Τζίρος Τμήματος: **{fmt_euro(dept_totals[top_d])}**")
     else:
         st.write("Δεν υπάρχουν δεδομένα για αυτή την περίοδο.")
 
