@@ -1,5 +1,6 @@
 streamlit
 pandas
 imap-tools
-pdfplumber
-openpyxl
+pdf2image
+pytesseract
+Pillow
