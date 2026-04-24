@@ -205,7 +205,7 @@ def extract_pdf_data(pdf_bytes: bytes) -> dict:
     return result
 
 # ══════════════════════════════════════════════════════════
-# SMART EMAIL SYNC (ΕΞΥΠΝΗ ΑΝΑΖΗΤΗΣΗ Ή ΒΑΘΙΑ ΕΡΕΥΝΑ)
+# SMART EMAIL SYNC - ΒΑΘΙΑ ΑΝΑΖΗΤΗΣΗ & FAST SKIP
 # ══════════════════════════════════════════════════════════
 def _pick_folder(mailbox: MailBox) -> str:
     try:
@@ -223,19 +223,15 @@ def _norm(s):
 def sync_emails(df: pd.DataFrame) -> tuple[pd.DataFrame, list]:
     logs   = []
     
-    # Λίστα με ημερομηνίες που ΕΧΟΥΜΕ ΗΔΗ
+    # Λίστα με ημερομηνίες που ΕΧΟΥΜΕ ΗΔΗ αποθηκευμένες
     existing_dates = set(df['date'].values) if not df.empty else set()
     
-    # --- ΧΕΙΡΟΥΡΓΙΚΗ ΕΠΕΜΒΑΣΗ ΕΔΩ ΓΙΑ ΤΟΝ ΕΞΥΠΝΟ ΣΥΓΧΡΟΝΙΣΜΟ ---
-    if not df.empty:
-        # Αν έχουμε δεδομένα, ψάχνουμε από την τελευταία μέρα που έχουμε + 2 μέρες πίσω για ασφάλεια
-        last_known_date = df['date'].max()
-        since_date = last_known_date - timedelta(days=2)
-        logs.append(f"📡 Γρήγορη Ενημέρωση (Νέα αρχεία από **{since_date.strftime('%d/%m/%Y')}**) ...")
-    else:
-        # Αν η βάση είναι εντελώς άδεια, τραβάμε τα πάντα από τις 11/10/2024
-        since_date = date(2024, 10, 11)
-        logs.append(f"📡 Βαθιά Αναζήτηση Ιστορικού (Από **{since_date.strftime('%d/%m/%Y')}**) ...")
+    # --- ΚΛΕΙΔΩΜΕΝΗ ΗΜΕΡΟΜΗΝΙΑ ---
+    # Ζητάμε ΠΑΝΤΑ από τον server τα email από τις 11 Οκτωβρίου 2024. 
+    # Έτσι βρίσκει όλο το ιστορικό και τα κενά.
+    since_date = date(2024, 10, 11)
+    
+    logs.append(f"📡 Σάρωση ιστορικού (σταθερά από **{since_date.strftime('%d/%m/%Y')}**) ...")
 
     try:
         with MailBox('imap.gmail.com').login(EMAIL_USER, EMAIL_PASS) as mailbox:
@@ -244,7 +240,7 @@ def sync_emails(df: pd.DataFrame) -> tuple[pd.DataFrame, list]:
 
             criteria = AND(from_=EMAIL_FROM, date_gte=since_date)
 
-            checked = found = 0
+            checked = found = skipped = 0
             target_subj = _norm(EMAIL_SUBJECT)
 
             for msg in mailbox.fetch(criteria, reverse=True, mark_seen=False):
@@ -254,7 +250,12 @@ def sync_emails(df: pd.DataFrame) -> tuple[pd.DataFrame, list]:
                     continue
                 
                 msg_date = msg.date.date()
+                
+                # --- FAST SKIP ---
+                # Αν αυτή η ημερομηνία υπάρχει ΗΔΗ στο csv μας, αγνόησε το email
+                # αστραπιαία, χωρίς να κάνεις λήψη του PDF!
                 if msg_date in existing_dates or (msg_date - timedelta(days=1)) in existing_dates:
+                    skipped += 1
                     continue
 
                 for att in msg.attachments:
@@ -272,7 +273,7 @@ def sync_emails(df: pd.DataFrame) -> tuple[pd.DataFrame, list]:
                         found += 1
                     break
 
-            logs.append(f"🔎 Emails που ελέγχθηκαν: **{checked}** · Νέες αναφορές που προστέθηκαν: **{found}**")
+            logs.append(f"🔎 Ελέγχθηκαν: **{checked}** email | ⚡ Προσπεράστηκαν (ήδη στο αρχείο): **{skipped}** | ✅ Προστέθηκαν: **{found}**")
 
     except Exception as e:
         logs.append(f"❌ **IMAP σφάλμα:** {e}")
@@ -338,7 +339,7 @@ with tc2:
     upload_btn = st.button("↑  PDF Upload",    use_container_width=True, type="secondary")
 
 if sync_btn:
-    with st.spinner("Σύνδεση στο Gmail (Έξυπνος Συγχρονισμός)..."):
+    with st.spinner("Σύνδεση στο Gmail (Σάρωση ιστορικού...)"):
         df, logs = sync_emails(df)
         save_history(df)
         st.session_state['auto_synced'] = True
