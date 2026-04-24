@@ -205,7 +205,7 @@ def extract_pdf_data(pdf_bytes: bytes) -> dict:
     return result
 
 # ══════════════════════════════════════════════════════════
-# SMART EMAIL SYNC - ΒΑΘΙΑ ΑΝΑΖΗΤΗΣΗ & FAST SKIP
+# SMART EMAIL SYNC (ΒΑΘΙΑ ΑΝΑΖΗΤΗΣΗ & FAST SKIP)
 # ══════════════════════════════════════════════════════════
 def _pick_folder(mailbox: MailBox) -> str:
     try:
@@ -226,12 +226,19 @@ def sync_emails(df: pd.DataFrame) -> tuple[pd.DataFrame, list]:
     # Λίστα με ημερομηνίες που ΕΧΟΥΜΕ ΗΔΗ αποθηκευμένες
     existing_dates = set(df['date'].values) if not df.empty else set()
     
-    # --- ΚΛΕΙΔΩΜΕΝΗ ΗΜΕΡΟΜΗΝΙΑ ---
-    # Ζητάμε ΠΑΝΤΑ από τον server τα email από τις 11 Οκτωβρίου 2024. 
-    # Έτσι βρίσκει όλο το ιστορικό και τα κενά.
-    since_date = date(2024, 10, 11)
+    # --- ΧΕΙΡΟΥΡΓΙΚΗ ΕΠΕΜΒΑΣΗ 1: ΕΛΕΓΧΟΣ ΙΣΤΟΡΙΚΟΤΗΤΑΣ ---
+    oldest_record = df['date'].min() if not df.empty else date.today()
+    latest_record = df['date'].max() if not df.empty else date(2024, 10, 11)
     
-    logs.append(f"📡 Σάρωση ιστορικού (σταθερά από **{since_date.strftime('%d/%m/%Y')}**) ...")
+    # Αν η πιο παλιά εγγραφή είναι ΠΙΟ ΠΡΟΣΦΑΤΗ από τις 15/10/2024,
+    # σημαίνει ότι μας λείπει το παλιό ιστορικό. Άρα αναγκαστική ΒΑΘΙΑ σάρωση!
+    if df.empty or oldest_record > date(2024, 10, 15):
+        since_date = date(2024, 10, 11)
+        logs.append(f"📡 Βαθιά Σάρωση Ιστορικού 2 Ετών (Από **{since_date.strftime('%d/%m/%Y')}**) ...")
+    else:
+        # Έχουμε κατεβάσει το ιστορικό! Άρα ψάχνουμε μόνο τις τελευταίες 3-4 μέρες για ταχύτητα.
+        since_date = latest_record - timedelta(days=3)
+        logs.append(f"📡 Γρήγορη Ενημέρωση (Νέα email από **{since_date.strftime('%d/%m/%Y')}**) ...")
 
     try:
         with MailBox('imap.gmail.com').login(EMAIL_USER, EMAIL_PASS) as mailbox:
@@ -251,9 +258,7 @@ def sync_emails(df: pd.DataFrame) -> tuple[pd.DataFrame, list]:
                 
                 msg_date = msg.date.date()
                 
-                # --- FAST SKIP ---
-                # Αν αυτή η ημερομηνία υπάρχει ΗΔΗ στο csv μας, αγνόησε το email
-                # αστραπιαία, χωρίς να κάνεις λήψη του PDF!
+                # Αν υπάρχει ήδη η ημερομηνία, πέρνα στο επόμενο email αστραπιαία (Fast Skip)
                 if msg_date in existing_dates or (msg_date - timedelta(days=1)) in existing_dates:
                     skipped += 1
                     continue
@@ -273,7 +278,7 @@ def sync_emails(df: pd.DataFrame) -> tuple[pd.DataFrame, list]:
                         found += 1
                     break
 
-            logs.append(f"🔎 Ελέγχθηκαν: **{checked}** email | ⚡ Προσπεράστηκαν (ήδη στο αρχείο): **{skipped}** | ✅ Προστέθηκαν: **{found}**")
+            logs.append(f"🔎 Ελέγχθηκαν: **{checked}** | ⚡ Ήταν ήδη αποθηκευμένα: **{skipped}** | ✅ Προστέθηκαν ΝΕΑ: **{found}**")
 
     except Exception as e:
         logs.append(f"❌ **IMAP σφάλμα:** {e}")
@@ -303,11 +308,14 @@ def period_stats(df, start, end):
 
 df = load_history()
 
-if 'auto_synced' not in st.session_state:
-    st.session_state['auto_synced'] = False
-
-last_d = df['date'].max() if not df.empty else None
-needs_sync = (last_d is None) or (last_d < date.today())
+# --- ΧΕΙΡΟΥΡΓΙΚΗ ΕΠΕΜΒΑΣΗ 2: ΑΜΕΣΗ ΕΝΗΜΕΡΩΣΗ ΣΤΟ ΑΝΟΙΓΜΑ ---
+# Με το που ανοίγει η σελίδα τρέχει ΑΜΕΣΑ την ενημέρωση για να είναι πάντα φρέσκια!
+if 'app_opened' not in st.session_state:
+    st.session_state['app_opened'] = True
+    with st.spinner("🔄 Αυτόματη λήψη νέων δεδομένων..."):
+        df, logs = sync_emails(df)
+        save_history(df)
+    st.rerun() # Ανανεώνει τη σελίδα αστραπιαία για να σου δείξει τα νέα νούμερα
 
 # Σωστή Ώρα Ελλάδος
 current_gr_time = datetime.now(ZoneInfo("Europe/Athens")).strftime('%d/%m/%Y %H:%M')
@@ -326,7 +334,6 @@ st.markdown(f"""
   <div style="text-align:right;">
     <div style="font-size:.7rem;color:#cbd5e1;">Τελευταία ενημέρωση (Ώρα Ελλάδος)</div>
     <div style="font-family:'DM Mono';font-size:.75rem;color:#e2e8f0;">{current_gr_time}</div>
-    {"<div style='font-size:.7rem;color:#f59e0b;margin-top:.3rem;'>⚠ Υπάρχουν νέα δεδομένα</div>" if needs_sync and st.session_state['auto_synced'] else ""}
   </div>
 </div>
 """, unsafe_allow_html=True)
@@ -339,18 +346,10 @@ with tc2:
     upload_btn = st.button("↑  PDF Upload",    use_container_width=True, type="secondary")
 
 if sync_btn:
-    with st.spinner("Σύνδεση στο Gmail (Σάρωση ιστορικού...)"):
+    with st.spinner("Έλεγχος και λήψη από Gmail..."):
         df, logs = sync_emails(df)
         save_history(df)
-        st.session_state['auto_synced'] = True
-    for l in logs: st.markdown(l)
-    st.rerun()
-
-if needs_sync and not st.session_state['auto_synced']:
-    with st.spinner("🔄 Αυτόματη ενημέρωση..."):
-        df, logs = sync_emails(df)
-        save_history(df)
-        st.session_state['auto_synced'] = True
+    for l in logs: st.toast(l) # Χρησιμοποιούμε toast για να μην χάνεται το μήνυμα
     st.rerun()
 
 if upload_btn:
@@ -532,7 +531,6 @@ with tab3:
 with tab4:
     st.markdown('<div class="sec-header"><span>▍</span> Ιστορικό & Αναζήτηση</div>', unsafe_allow_html=True)
     
-    # --- ΝΕΑ ΦΙΛΤΡΑ ΠΟΥ ΖΗΤΗΣΕΣ ---
     f_col1, f_col2 = st.columns(2)
     with f_col1:
         if not df.empty:
@@ -545,14 +543,12 @@ with tab4:
     with f_col2:
         group_by = st.selectbox("📊 Ομαδοποίηση Πωλήσεων ανά:", ["Ημέρα", "Εβδομάδα", "Μήνα"])
 
-    # Εφαρμογή Φίλτρου Ημερομηνιών
     disp_df = df.copy()
     if len(date_range) == 2:
         disp_df = disp_df[(disp_df['date'] >= date_range[0]) & (disp_df['date'] <= date_range[1])]
     elif len(date_range) == 1:
         disp_df = disp_df[disp_df['date'] == date_range[0]]
 
-    # Εφαρμογή Ομαδοποίησης
     if disp_df.empty:
         st.info("Δεν βρέθηκαν δεδομένα για αυτό το διάστημα.")
     else:
