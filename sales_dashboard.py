@@ -133,7 +133,6 @@ def ocr_page(img) -> str:
     return pytesseract.image_to_string(img, lang='ell+eng')
 
 # Fuzzy αναζήτηση: ψάχνει ένα label ανεκτικό σε συνηθισμένα OCR λάθη
-# π.χ. NetDaySalDis → NetDaySaiDis / NetDaySa1Dis κλπ.
 _FUZZY = {
     'NetDaySalDis': r'Net\s*Day\s*Sa[li1]Dis',
     'NumOfCus':     r'Num\s*Of\s*Cus',
@@ -163,7 +162,12 @@ def find_value(text: str, label: str) -> str | None:
 def extract_pdf_data(pdf_bytes: bytes) -> dict:
     result = {'date': None, 'netday': None, 'customers': None, 'avg_basket': None, 'depts': '[]'}
     try:
-        images = convert_from_bytes(pdf_bytes, dpi=180, fmt='jpeg')
+        # ─────────────────────────────────────────────────────────
+        # ΒΕΛΤΙΩΣΗ: Περιορισμός στις 2 πρώτες σελίδες (Τεράστια εξοικονόμηση μνήμης)
+        # ─────────────────────────────────────────────────────────
+        images = convert_from_bytes(pdf_bytes, dpi=180, fmt='jpeg', first_page=1, last_page=2)
+
+        if not images: return result # Σε περίπτωση σφάλματος του PDF
 
         # ── Σελίδα 1: κύρια μεγέθη ────────────────────────
         p1 = ocr_page(images[0])
@@ -189,7 +193,10 @@ def extract_pdf_data(pdf_bytes: bytes) -> dict:
         if raw: result['avg_basket'] = parse_num(raw)
 
         # ── Τμήματα (σελ 1 + 2) ───────────────────────────
-        dept_text = p1 + ("\n" + ocr_page(images[1]) if len(images) > 1 else "")
+        # Ασφαλής έλεγχος αν υπάρχει όντως 2η σελίδα στο PDF
+        dept_text = p1
+        if len(images) > 1:
+            dept_text += "\n" + ocr_page(images[1])
 
         # Pattern: 001 ΟΠΩΡΟΠΩΛΕΙΟ  869,75  828,16  10,60  11,47
         dept_pat = re.compile(
@@ -209,12 +216,11 @@ def extract_pdf_data(pdf_bytes: bytes) -> dict:
         )
 
     except Exception as e:
-        st.warning(f"OCR: {e}")
+        st.warning(f"OCR Error: {e}")
     return result
 
 # ══════════════════════════════════════════════════════════
 # SMART EMAIL SYNC
-# Χρησιμοποιεί server-side φιλτράρισμα FROM + DATE → ελάχιστα emails
 # ══════════════════════════════════════════════════════════
 def _pick_folder(mailbox: MailBox) -> str:
     try:
@@ -244,9 +250,6 @@ def sync_emails(df: pd.DataFrame) -> tuple[pd.DataFrame, list]:
             try:    mailbox.folder.set(_pick_folder(mailbox))
             except: mailbox.folder.set('INBOX')
 
-            # ── Server-side φιλτράρισμα: FROM + DATE ──────────────
-            # Αυτό επιστρέφει ΜΟΝΟ emails από τον σωστό αποστολέα μετά από συγκεκριμένη ημέρα
-            # → ΠΟΛΥ πιο γρήγορο από fetch all
             criteria = AND(from_=EMAIL_FROM, date_gte=since_date)
 
             checked = found = 0
@@ -255,7 +258,6 @@ def sync_emails(df: pd.DataFrame) -> tuple[pd.DataFrame, list]:
             for msg in mailbox.fetch(criteria, reverse=True, mark_seen=False):
                 checked += 1
 
-                # Client-side έλεγχος θέματος (ασφαλής για ελληνικά)
                 if target_subj not in _norm(msg.subject):
                     continue
 
@@ -265,7 +267,6 @@ def sync_emails(df: pd.DataFrame) -> tuple[pd.DataFrame, list]:
                     data = extract_pdf_data(att.payload)
                     if data['date'] is None: data['date'] = msg.date.date()
 
-                    # Παράλειψε αν ήδη στο αρχείο
                     if last_d and data['date'] <= last_d:
                         continue
 
@@ -306,7 +307,6 @@ def period_stats(df, start, end):
 df = load_history()
 
 # ── AUTO-SYNC: τρέχει σιωπηλά αν τα δεδομένα είναι παλιά ─
-# (μόνο μία φορά ανά session, χωρίς να μπλοκάρει την εμφάνιση)
 if 'auto_synced' not in st.session_state:
     st.session_state['auto_synced'] = False
 
