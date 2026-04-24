@@ -3,7 +3,7 @@ import pandas as pd
 import io, os, re, json
 from imap_tools import MailBox, AND
 from datetime import datetime, date, timedelta
-from zoneinfo import ZoneInfo # Προσθήκη για σωστή ώρα Ελλάδος
+from zoneinfo import ZoneInfo
 import pytesseract
 from pdf2image import convert_from_bytes
 import traceback
@@ -130,7 +130,7 @@ def upsert(df: pd.DataFrame, record: dict) -> pd.DataFrame:
     return df.sort_values('date', ascending=False).reset_index(drop=True)
 
 # ══════════════════════════════════════════════════════════
-# OCR  –  ανθεκτικό σε OCR λάθη (l↔i, I↔l κλπ.)
+# OCR
 # ══════════════════════════════════════════════════════════
 def ocr_page(img) -> str:
     return pytesseract.image_to_string(img, lang='ell+eng')
@@ -205,7 +205,7 @@ def extract_pdf_data(pdf_bytes: bytes) -> dict:
     return result
 
 # ══════════════════════════════════════════════════════════
-# SMART EMAIL SYNC (ΒΑΘΙΑ ΑΝΑΖΗΤΗΣΗ & FAST SKIP)
+# ΕΞΥΠΝΟΣ ΣΥΓΧΡΟΝΙΣΜΟΣ
 # ══════════════════════════════════════════════════════════
 def _pick_folder(mailbox: MailBox) -> str:
     try:
@@ -220,25 +220,18 @@ def _norm(s):
     s = unicodedata.normalize('NFD', s or '')
     return ''.join(c for c in s if unicodedata.category(c) != 'Mn').upper()
 
-def sync_emails(df: pd.DataFrame) -> tuple[pd.DataFrame, list]:
-    logs   = []
-    
-    # Λίστα με ημερομηνίες που ΕΧΟΥΜΕ ΗΔΗ αποθηκευμένες
+def sync_emails(df: pd.DataFrame, deep_scan=False) -> tuple[pd.DataFrame, list]:
+    logs = []
     existing_dates = set(df['date'].values) if not df.empty else set()
     
-    # --- ΧΕΙΡΟΥΡΓΙΚΗ ΕΠΕΜΒΑΣΗ 1: ΕΛΕΓΧΟΣ ΙΣΤΟΡΙΚΟΤΗΤΑΣ ---
-    oldest_record = df['date'].min() if not df.empty else date.today()
-    latest_record = df['date'].max() if not df.empty else date(2024, 10, 11)
-    
-    # Αν η πιο παλιά εγγραφή είναι ΠΙΟ ΠΡΟΣΦΑΤΗ από τις 15/10/2024,
-    # σημαίνει ότι μας λείπει το παλιό ιστορικό. Άρα αναγκαστική ΒΑΘΙΑ σάρωση!
-    if df.empty or oldest_record > date(2024, 10, 15):
-        since_date = date(2024, 10, 11)
-        logs.append(f"📡 Βαθιά Σάρωση Ιστορικού 2 Ετών (Από **{since_date.strftime('%d/%m/%Y')}**) ...")
+    # 1. Επιλογή στρατηγικής αναζήτησης
+    if deep_scan or df.empty:
+        since_date = date(2024, 10, 11)  # Σταθερό σημείο αναφοράς (2 χρόνια πίσω)
+        logs.append(f"📡 **Βαθύ Ιστορικό:** Αναζήτηση από {since_date.strftime('%d/%m/%Y')} ...")
     else:
-        # Έχουμε κατεβάσει το ιστορικό! Άρα ψάχνουμε μόνο τις τελευταίες 3-4 μέρες για ταχύτητα.
-        since_date = latest_record - timedelta(days=3)
-        logs.append(f"📡 Γρήγορη Ενημέρωση (Νέα email από **{since_date.strftime('%d/%m/%Y')}**) ...")
+        last_known = df['date'].max()
+        since_date = last_known - timedelta(days=7) # Ψάχνει λίγες μέρες πίσω για τυχόν κενά
+        logs.append(f"📡 **Γρήγορη Ενημέρωση:** Αναζήτηση από {since_date.strftime('%d/%m/%Y')} ...")
 
     try:
         with MailBox('imap.gmail.com').login(EMAIL_USER, EMAIL_PASS) as mailbox:
@@ -258,8 +251,8 @@ def sync_emails(df: pd.DataFrame) -> tuple[pd.DataFrame, list]:
                 
                 msg_date = msg.date.date()
                 
-                # Αν υπάρχει ήδη η ημερομηνία, πέρνα στο επόμενο email αστραπιαία (Fast Skip)
-                if msg_date in existing_dates or (msg_date - timedelta(days=1)) in existing_dates:
+                # Αν η ημερομηνία υπάρχει ήδη μέσα στο αρχείο μας, προσπέρασε γρήγορα!
+                if msg_date in existing_dates:
                     skipped += 1
                     continue
 
@@ -273,16 +266,15 @@ def sync_emails(df: pd.DataFrame) -> tuple[pd.DataFrame, list]:
                         continue
 
                     if data['netday'] and data['netday'] > 0:
-                        df    = upsert(df, data)
+                        df = upsert(df, data)
                         existing_dates.add(data['date'])
                         found += 1
                     break
 
-            logs.append(f"🔎 Ελέγχθηκαν: **{checked}** | ⚡ Ήταν ήδη αποθηκευμένα: **{skipped}** | ✅ Προστέθηκαν ΝΕΑ: **{found}**")
+            logs.append(f"🔎 Ελέγχθηκαν: **{checked}** | ⚡ Υπήρχαν ήδη: **{skipped}** | ✅ Νέα που βρέθηκαν: **{found}**")
 
     except Exception as e:
         logs.append(f"❌ **IMAP σφάλμα:** {e}")
-        logs.append("```\n" + traceback.format_exc() + "\n```")
 
     return df, logs
 
@@ -308,14 +300,14 @@ def period_stats(df, start, end):
 
 df = load_history()
 
-# --- ΧΕΙΡΟΥΡΓΙΚΗ ΕΠΕΜΒΑΣΗ 2: ΑΜΕΣΗ ΕΝΗΜΕΡΩΣΗ ΣΤΟ ΑΝΟΙΓΜΑ ---
-# Με το που ανοίγει η σελίδα τρέχει ΑΜΕΣΑ την ενημέρωση για να είναι πάντα φρέσκια!
-if 'app_opened' not in st.session_state:
-    st.session_state['app_opened'] = True
-    with st.spinner("🔄 Αυτόματη λήψη νέων δεδομένων..."):
-        df, logs = sync_emails(df)
-        save_history(df)
-    st.rerun() # Ανανεώνει τη σελίδα αστραπιαία για να σου δείξει τα νέα νούμερα
+# --- ΑΥΤΟΜΑΤΗ ΕΝΗΜΕΡΩΣΗ ΜΟΛΙΣ ΑΝΟΙΓΕΙ ΤΟ PORTAL (Τρέχει ΜΟΝΟ 1 φορά) ---
+if 'startup_synced' not in st.session_state:
+    st.session_state['startup_synced'] = True
+    if not df.empty:
+        with st.spinner("🔄 Γίνεται αυτόματη ενημέρωση..."):
+            df, _ = sync_emails(df, deep_scan=False)
+            save_history(df)
+        st.rerun()
 
 # Σωστή Ώρα Ελλάδος
 current_gr_time = datetime.now(ZoneInfo("Europe/Athens")).strftime('%d/%m/%Y %H:%M')
@@ -338,18 +330,27 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# Toolbar
-tc1, tc2, tc3 = st.columns([1, 1, 4])
+# Toolbar με δύο κουμπιά: Ένα γρήγορο και ένα για το Βαθύ Ιστορικό!
+tc1, tc2, tc3 = st.columns([1.5, 1.5, 3])
 with tc1:
-    sync_btn   = st.button("⟳  Συγχρονισμός", use_container_width=True, type="primary")
+    sync_btn_quick = st.button("⟳ Γρήγορη Ενημέρωση", use_container_width=True, type="primary")
 with tc2:
-    upload_btn = st.button("↑  PDF Upload",    use_container_width=True, type="secondary")
+    sync_btn_deep = st.button("📥 Βαθύ Ιστορικό", use_container_width=True, type="secondary")
+with tc3:
+    upload_btn = st.button("↑ PDF Upload", use_container_width=True, type="secondary")
 
-if sync_btn:
-    with st.spinner("Έλεγχος και λήψη από Gmail..."):
-        df, logs = sync_emails(df)
+if sync_btn_quick:
+    with st.spinner("Σύνδεση στο Gmail (έλεγχος τελευταίων ημερών)..."):
+        df, logs = sync_emails(df, deep_scan=False)
         save_history(df)
-    for l in logs: st.toast(l) # Χρησιμοποιούμε toast για να μην χάνεται το μήνυμα
+    for l in logs: st.toast(l)
+    st.rerun()
+
+if sync_btn_deep:
+    with st.spinner("Σύνδεση στο Gmail (Σάρωση ιστορικού 2 Ετών, αναμείνατε)..."):
+        df, logs = sync_emails(df, deep_scan=True)
+        save_history(df)
+    for l in logs: st.toast(l)
     st.rerun()
 
 if upload_btn:
@@ -379,7 +380,7 @@ if df.empty:
     <div style="text-align:center;padding:4rem 2rem;color:#cbd5e1;">
       <div style="font-size:3rem;margin-bottom:1rem;">📭</div>
       <div style="font-size:1rem;font-weight:600;color:#f1f5f9;">Δεν υπάρχουν δεδομένα</div>
-      <div style="font-size:.82rem;margin-top:.5rem;">Πατήστε «Συγχρονισμός» ή ανεβάστε PDF</div>
+      <div style="font-size:.82rem;margin-top:.5rem;">Πατήστε «Γρήγορη Ενημέρωση» ή «Βαθύ Ιστορικό»</div>
     </div>
     """, unsafe_allow_html=True)
     st.stop()
@@ -388,7 +389,7 @@ if df.empty:
 # TABS
 # ══════════════════════════════════════════════════════════
 tab1, tab2, tab3, tab4 = st.tabs([
-    "📍  Τελευταία Αναφορά", "📈  Τάσεις", "⚖️  Συγκρίσεις", "📋  Ιστορικό"
+    "📍 Τελευταία Αναφορά", "📈 Τάσεις", "⚖️ Συγκρίσεις", "📋 Ιστορικό & Φίλτρα"
 ])
 
 # ════════════════════════════════════════
