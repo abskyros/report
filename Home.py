@@ -1,196 +1,141 @@
 import streamlit as st
 import pandas as pd
-import json
-from datetime import date, datetime, timedelta
+from datetime import datetime, date, timedelta
 import sys, os
 sys.path.insert(0, os.path.dirname(__file__))
-from utils import (
-    COMMON_CSS, MONTHS_GR, DAYS_GR,
-    fmt_euro, load_history, period_stats, delta_html
-)
+from utils import CSS, MONTHS_GR, DAYS_GR, fmt_euro, load_history, period_stats, delta_html
 
 st.set_page_config(
-    page_title="ΑΒ ΣΚΥΡΟΣ · Κεντρικό",
+    page_title="AB Skyros — Business Hub",
     layout="wide",
-    page_icon="🏪",
+    page_icon=None,
     initial_sidebar_state="expanded",
 )
+st.markdown(CSS, unsafe_allow_html=True)
 
-st.markdown(COMMON_CSS, unsafe_allow_html=True)
-
-# ══════════════════════════════════════════════════════════
-# SIDEBAR NAVIGATION
-# ══════════════════════════════════════════════════════════
+# ── Sidebar ──────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("""
-    <div style="padding:1rem 0 1.5rem;">
-      <div style="font-size:.65rem;font-weight:700;letter-spacing:.15em;text-transform:uppercase;color:#10b981;margin-bottom:.3rem;">ΑΒ ΣΚΥΡΟΣ 1082</div>
-      <div style="font-size:1.1rem;font-weight:700;color:#f1f5f9;">Business Hub</div>
+    <div style="padding:1.2rem 0 1rem;">
+      <div style="font-size:.62rem;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:#60a5fa;margin-bottom:.3rem;">AB SKYROS 1082</div>
+      <div style="font-size:1rem;font-weight:700;color:#f1f5f9;margin-bottom:1.5rem;">Business Hub</div>
     </div>
     """, unsafe_allow_html=True)
+    st.markdown('<div style="font-size:.6rem;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:#4b5563;margin-bottom:.4rem;padding-left:.9rem;">NAVIGATION</div>', unsafe_allow_html=True)
+    st.page_link("Home.py",                     label="Home")
+    st.page_link("pages/1_Sales.py",             label="Sales Analytics")
+    st.page_link("pages/2_Invoices.py",          label="Invoices")
+    st.markdown(f'<div style="position:absolute;bottom:1.5rem;left:0;right:0;padding:0 1rem;font-size:.65rem;color:#374151;">{datetime.now().strftime("%d/%m/%Y · %H:%M")}</div>', unsafe_allow_html=True)
 
-    st.markdown('<div style="font-size:.65rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#334155;margin-bottom:.5rem;">ΠΛΟΗΓΗΣΗ</div>', unsafe_allow_html=True)
-    st.page_link("Home.py",                         label="🏠  Αρχική Σελίδα",    )
-    st.page_link("pages/1_📊_Πωλήσεις.py",          label="📊  Sales Analytics",  )
-    st.page_link("pages/2_📋_Τιμολόγια.py",          label="📋  Τιμολόγια",        )
-
-    st.markdown("---")
-    st.markdown(f'<div style="font-size:.7rem;color:#334155;">Σήμερα: {datetime.now().strftime("%d/%m/%Y")}</div>', unsafe_allow_html=True)
-
-# ══════════════════════════════════════════════════════════
-# HEADER
-# ══════════════════════════════════════════════════════════
+# ── Header ───────────────────────────────────────────────────────────────────
+today = date.today()
 st.markdown(f"""
-<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2rem;">
-  <div>
-    <div style="font-size:.7rem;font-weight:700;letter-spacing:.15em;text-transform:uppercase;color:#10b981;margin-bottom:.3rem;">
-      ΑΒ ΣΚΥΡΟΣ · ΚΑΤΑΣΤΗΜΑ 1082
-    </div>
-    <h1 style="font-size:2.2rem;font-weight:700;color:#f1f5f9;margin:0;letter-spacing:-.02em;">
-      Business Hub
-    </h1>
-    <div style="font-size:.85rem;color:#475569;margin-top:.4rem;">
-      Κεντρικός πίνακας ελέγχου · {DAYS_GR[datetime.now().weekday()]}, {datetime.now().strftime('%d')} {MONTHS_GR[datetime.now().month-1]} {datetime.now().year}
-    </div>
+<div class="page-header">
+  <div class="page-header-left">
+    <div class="eyebrow">AB Skyros — Κατάστημα 1082</div>
+    <h1>Business Hub</h1>
   </div>
-  <div style="text-align:right;">
-    <div style="font-size:.7rem;color:#475569;">Τελευταία ανανέωση</div>
-    <div style="font-family:'DM Mono';font-size:.78rem;color:#64748b;">{datetime.now().strftime('%H:%M')}</div>
+  <div class="page-header-right">
+    <div class="ts-label">Σήμερα</div>
+    <div class="ts-val">{DAYS_GR[today.weekday()]}, {today.day} {MONTHS_GR[today.month-1]} {today.year}</div>
   </div>
 </div>
 """, unsafe_allow_html=True)
 
-# ══════════════════════════════════════════════════════════
-# NAVIGATION CARDS
-# ══════════════════════════════════════════════════════════
-st.markdown('<div class="sec-header"><span>▍</span> Εφαρμογές</div>', unsafe_allow_html=True)
+# ── Module cards ─────────────────────────────────────────────────────────────
+st.markdown('<div class="sec-hdr">Ενότητες</div>', unsafe_allow_html=True)
+st.markdown("""
+<div class="nav-grid">
+  <div class="nav-card" style="--stripe:#2563eb;">
+    <div class="nc-module">Sales Analytics</div>
+    <div class="nc-title">Πωλήσεις Καταστήματος</div>
+    <div class="nc-desc">Ημερήσιος τζίρος, αριθμός πελατών, ανάλυση τμημάτων, συγκρίσεις περιόδων. Αυτόματη ανάκτηση μέσω email.</div>
+    <div class="nc-tags"><span class="nc-tag">Daily Sales</span><span class="nc-tag">OCR</span><span class="nc-tag">Departments</span></div>
+  </div>
+  <div class="nav-card" style="--stripe:#0891b2;">
+    <div class="nc-module" style="color:#0891b2;">Invoices</div>
+    <div class="nc-title">Έλεγχος Τιμολογίων</div>
+    <div class="nc-desc">Παρακολούθηση τιμολογίων και πιστωτικών. Εβδομαδιαία και μηνιαία εικόνα με εξαγωγή δεδομένων.</div>
+    <div class="nc-tags"><span class="nc-tag" style="background:#ecfeff;color:#0e7490;">Weekly</span><span class="nc-tag" style="background:#ecfeff;color:#0e7490;">Monthly</span><span class="nc-tag" style="background:#ecfeff;color:#0e7490;">Export</span></div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
 
-nc1, nc2 = st.columns(2)
-with nc1:
-    st.markdown("""
-    <a href="/📊_Πωλήσεις" target="_self" style="text-decoration:none;">
-      <div class="nav-card">
-        <div class="icon">📊</div>
-        <div class="title">Sales Analytics</div>
-        <div class="desc">Ημερήσιες πωλήσεις, τάσεις, ανάλυση τμημάτων και συγκρίσεις περιόδων. Αυτόματη λήψη από email με PDF reports.</div>
-        <div class="badge">Sales · OCR · Email</div>
-      </div>
-    </a>
-    """, unsafe_allow_html=True)
+ca, cb = st.columns(2)
+with ca:
+    if st.button("Μετάβαση στο Sales Analytics", use_container_width=True):
+        st.switch_page("pages/1_Sales.py")
+with cb:
+    if st.button("Μετάβαση στα Τιμολόγια", use_container_width=True, type="secondary"):
+        st.switch_page("pages/2_Invoices.py")
 
-with nc2:
-    st.markdown("""
-    <a href="/📋_Τιμολόγια" target="_self" style="text-decoration:none;">
-      <div class="nav-card" style="--accent:#3b82f6;">
-        <div class="icon">📋</div>
-        <div class="title">Έλεγχος Τιμολογίων</div>
-        <div class="desc">Παρακολούθηση τιμολογίων και πιστωτικών εγγράφων. Εβδομαδιαία και μηνιαία εικόνα με εξαγωγή δεδομένων.</div>
-        <div class="badge" style="background:#3b82f6;">Invoices · Weekly · Monthly</div>
-      </div>
-    </a>
-    """, unsafe_allow_html=True)
+st.markdown('<hr class="divider"/>', unsafe_allow_html=True)
 
-st.markdown('<hr class="divider-module"/>', unsafe_allow_html=True)
+# ── Sales KPI snapshot ───────────────────────────────────────────────────────
+st.markdown('<div class="sec-hdr">Sales Analytics — Σύνοψη</div>', unsafe_allow_html=True)
+df_s = load_history()
 
-# ══════════════════════════════════════════════════════════
-# QUICK KPIs – ΠΩΛΗΣΕΙΣ
-# ══════════════════════════════════════════════════════════
-st.markdown('<div class="sec-header"><span>▍</span> Sales Analytics · Σύνοψη</div>', unsafe_allow_html=True)
-
-df_sales = load_history()
-today    = date.today()
-
-if not df_sales.empty:
-    latest = df_sales.iloc[0]
-    prev   = df_sales.iloc[1] if len(df_sales) > 1 else None
-    ld     = latest['date']
+if not df_s.empty:
+    last   = df_s.iloc[0]
+    prev   = df_s.iloc[1] if len(df_s) > 1 else None
+    ld     = last["date"]
     days_old = (today - ld).days
 
-    # Status banner
     if days_old == 0:
-        st.markdown('<div class="ok-banner">✓ Sales · Ενημερωμένο σήμερα</div>', unsafe_allow_html=True)
-    elif days_old <= 2:
-        st.markdown(f'<div class="stale-banner">⚠ Sales · Τελευταία αναφορά {days_old} {"ημέρα" if days_old==1 else "ημέρες"} πίσω</div>', unsafe_allow_html=True)
+        st.markdown('<div class="banner banner-ok">Ενημερωμένο — τελευταία αναφορά σήμερα</div>', unsafe_allow_html=True)
     else:
-        st.markdown(f'<div class="stale-banner">⚠ Sales · Τελευταία αναφορά: {ld.strftime("%d/%m/%Y")} ({days_old} ημέρες πίσω)</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="banner banner-warn">Τελευταία αναφορά: {ld.strftime("%d/%m/%Y")} — {days_old} {"ημέρα" if days_old==1 else "ημέρες"} πίσω</div>', unsafe_allow_html=True)
 
-    def kpi(label, value, prev_val, accent, is_euro=True):
-        if value is None or (isinstance(value, float) and pd.isna(value)):
-            return f'<div class="kpi-card" style="--accent:{accent}"><div class="kpi-label">{label}</div><div class="kpi-value-sm">—</div></div>'
-        disp = fmt_euro(value) if is_euro else f"{int(value):,}".replace(",",".")
-        dlt  = delta_html(value, prev_val, is_euro) if prev_val is not None else ""
-        return (f'<div class="kpi-card" style="--accent:{accent}">'
-                f'<div class="kpi-label">{label}</div>'
-                f'<div class="kpi-value-sm">{disp}</div>{dlt}</div>')
+    cur_month_total = period_stats(df_s, date(today.year, today.month, 1), today)["total"]
 
-    st.markdown(f"""<div class="kpi-grid">
-      {kpi(f"Πωλήσεις {ld.strftime('%d/%m')}",    latest['netday'],    prev['netday']    if prev is not None else None, "#10b981")}
-      {kpi("Πελάτες",                              latest['customers'], prev['customers'] if prev is not None else None, "#3b82f6", False)}
-      {kpi("Μ.Ό. Καλαθιού",                       latest['avg_basket'],prev['avg_basket'] if prev is not None else None, "#8b5cf6")}
-      {kpi(f"Μήνας {MONTHS_GR[today.month-1][:3]}.",
-           period_stats(df_sales, date(today.year,today.month,1), today)['total'], None, "#f59e0b")}
+    def kpi_s(lbl, val, prev_val, acc, euro=True):
+        if val is None or (isinstance(val, float) and pd.isna(val)):
+            return f'<div class="kpi" style="--a:{acc}"><div class="kpi-lbl">{lbl}</div><div class="kpi-val-sm">—</div></div>'
+        disp = fmt_euro(val) if euro else f"{int(val):,}".replace(",",".")
+        dlt  = delta_html(val, prev_val, euro) if prev_val is not None else ""
+        return (f'<div class="kpi" style="--a:{acc}">'
+                f'<div class="kpi-lbl">{lbl}</div>'
+                f'<div class="kpi-val-sm">{disp}</div>{dlt}</div>')
+
+    st.markdown(f"""<div class="kpi-row kpi-row-4">
+      {kpi_s(f"Πωλήσεις {ld.strftime('%d/%m')}", last["netday"],    prev["netday"]    if prev is not None else None, "#2563eb")}
+      {kpi_s("Πελάτες",                           last["customers"], prev["customers"] if prev is not None else None, "#7c3aed", euro=False)}
+      {kpi_s("Μ.Ο. Καλαθιού",                    last["avg_basket"],prev["avg_basket"] if prev is not None else None, "#0891b2")}
+      {kpi_s(f"Μηνιαίο ({MONTHS_GR[today.month-1][:3]})", cur_month_total, None, "#059669")}
     </div>""", unsafe_allow_html=True)
 
-    # Mini chart τελευταίων 14 ημερών
-    ch = df_sales[df_sales['date'] >= (today - timedelta(days=14))].sort_values('date').copy()
+    # Mini chart 14 ημερών
+    ch = df_s[df_s["date"] >= (today - timedelta(days=13))].sort_values("date").copy()
     if not ch.empty:
-        ch['label'] = ch['date'].apply(lambda d: d.strftime('%d/%m'))
-        st.bar_chart(ch.set_index('label')['netday'], color="#10b981",
-                     use_container_width=True, height=140)
-
-    col_link = st.columns([1, 3])[0]
-    with col_link:
-        if st.button("→  Πλήρες Sales Dashboard", use_container_width=True):
-            st.switch_page("pages/1_📊_Πωλήσεις.py")
+        ch["Ημέρα"] = ch["date"].apply(lambda d: d.strftime("%d/%m"))
+        st.bar_chart(ch.set_index("Ημέρα")["netday"], color="#2563eb",
+                     use_container_width=True, height=130)
 else:
-    st.markdown("""
-    <div style="background:#111827;border:1px solid #1e2d45;border-radius:12px;padding:2rem;text-align:center;color:#334155;">
-      <div style="font-size:2rem;margin-bottom:.5rem;">📭</div>
-      <div>Δεν υπάρχουν δεδομένα πωλήσεων</div>
-    </div>""", unsafe_allow_html=True)
-    col_link = st.columns([1, 3])[0]
-    with col_link:
-        if st.button("→  Μετάβαση στο Sales Dashboard", use_container_width=True):
-            st.switch_page("pages/1_📊_Πωλήσεις.py")
+    st.markdown('<div class="banner banner-info">Δεν υπάρχουν δεδομένα πωλήσεων. Μεταβείτε στο Sales Analytics για συγχρονισμό.</div>', unsafe_allow_html=True)
 
-st.markdown('<hr class="divider-module"/>', unsafe_allow_html=True)
+st.markdown('<hr class="divider"/>', unsafe_allow_html=True)
 
-# ══════════════════════════════════════════════════════════
-# QUICK KPIs – ΤΙΜΟΛΟΓΙΑ (από session_state αν φορτώθηκαν)
-# ══════════════════════════════════════════════════════════
-st.markdown('<div class="sec-header"><span>▍</span> Τιμολόγια · Σύνοψη</div>', unsafe_allow_html=True)
-
-inv_df = st.session_state.get('invoice_data', pd.DataFrame())
+# ── Invoice KPI snapshot ──────────────────────────────────────────────────────
+st.markdown('<div class="sec-hdr">Τιμολόγια — Σύνοψη</div>', unsafe_allow_html=True)
+inv_df = st.session_state.get("invoice_data", pd.DataFrame())
 
 if not inv_df.empty:
-    # Εβδομάδα
-    from datetime import timedelta as td
     ws  = today - timedelta(days=today.weekday())
-    we  = ws + timedelta(days=6)
-    ms  = date(today.year, today.month, 1)
+    m   = today.month; y = today.year
 
-    w_mask = (inv_df['DATE'].dt.date >= ws) & (inv_df['DATE'].dt.date <= today)
-    m_mask = (inv_df['DATE'].dt.month == today.month) & (inv_df['DATE'].dt.year == today.year)
+    w_mask = (inv_df["DATE"].dt.date >= ws) & (inv_df["DATE"].dt.date <= today)
+    m_mask = (inv_df["DATE"].dt.month == m) & (inv_df["DATE"].dt.year == y)
 
-    w_inv = inv_df[w_mask & ~inv_df['TYPE'].str.contains("ΠΙΣΤΩΤΙΚΟ", na=False)]['VALUE'].sum()
-    w_crd = inv_df[w_mask &  inv_df['TYPE'].str.contains("ΠΙΣΤΩΤΙΚΟ", na=False)]['VALUE'].sum()
-    m_inv = inv_df[m_mask & ~inv_df['TYPE'].str.contains("ΠΙΣΤΩΤΙΚΟ", na=False)]['VALUE'].sum()
-    m_crd = inv_df[m_mask &  inv_df['TYPE'].str.contains("ΠΙΣΤΩΤΙΚΟ", na=False)]['VALUE'].sum()
+    w_inv = inv_df[w_mask & ~inv_df["TYPE"].str.contains("ΠΙΣΤΩΤΙΚΟ", na=False)]["VALUE"].sum()
+    w_crd = inv_df[w_mask &  inv_df["TYPE"].str.contains("ΠΙΣΤΩΤΙΚΟ", na=False)]["VALUE"].sum()
+    m_inv = inv_df[m_mask & ~inv_df["TYPE"].str.contains("ΠΙΣΤΩΤΙΚΟ", na=False)]["VALUE"].sum()
+    m_crd = inv_df[m_mask &  inv_df["TYPE"].str.contains("ΠΙΣΤΩΤΙΚΟ", na=False)]["VALUE"].sum()
 
-    st.markdown(f"""<div class="kpi-grid">
-      <div class="kpi-card" style="--accent:#3b82f6"><div class="kpi-label">Τιμολόγια Εβδ.</div><div class="kpi-value-sm">{fmt_euro(w_inv)}</div></div>
-      <div class="kpi-card" style="--accent:#f43f5e"><div class="kpi-label">Πιστωτικά Εβδ.</div><div class="kpi-value-sm">{fmt_euro(w_crd)}</div></div>
-      <div class="kpi-card" style="--accent:#3b82f6"><div class="kpi-label">Τιμολόγια Μήνα</div><div class="kpi-value-sm">{fmt_euro(m_inv)}</div></div>
-      <div class="kpi-card" style="--accent:#10b981"><div class="kpi-label">Καθαρό Μήνα</div><div class="kpi-value-sm">{fmt_euro(m_inv - m_crd)}</div></div>
+    st.markdown(f"""<div class="kpi-row kpi-row-4">
+      <div class="kpi" style="--a:#0891b2"><div class="kpi-lbl">Τιμολόγια Εβδ.</div><div class="kpi-val-sm">{fmt_euro(w_inv)}</div></div>
+      <div class="kpi" style="--a:#dc2626"><div class="kpi-lbl">Πιστωτικά Εβδ.</div><div class="kpi-val-sm">{fmt_euro(w_crd)}</div></div>
+      <div class="kpi" style="--a:#0891b2"><div class="kpi-lbl">Τιμολόγια Μήνα</div><div class="kpi-val-sm">{fmt_euro(m_inv)}</div></div>
+      <div class="kpi" style="--a:#059669"><div class="kpi-lbl">Καθαρό Μήνα</div><div class="kpi-val-sm">{fmt_euro(m_inv - m_crd)}</div></div>
     </div>""", unsafe_allow_html=True)
 else:
-    st.markdown("""
-    <div style="background:#111827;border:1px solid #1e2d45;border-radius:12px;padding:2rem;text-align:center;color:#334155;">
-      <div style="font-size:2rem;margin-bottom:.5rem;">📭</div>
-      <div>Τα τιμολόγια δεν έχουν φορτωθεί ακόμα</div>
-    </div>""", unsafe_allow_html=True)
-
-col_link2 = st.columns([1, 3])[0]
-with col_link2:
-    if st.button("→  Μετάβαση στα Τιμολόγια", use_container_width=True, type="secondary"):
-        st.switch_page("pages/2_📋_Τιμολόγια.py")
+    st.markdown('<div class="banner banner-info">Τα τιμολόγια δεν έχουν φορτωθεί. Μεταβείτε στην ενότητα Τιμολόγια.</div>', unsafe_allow_html=True)
