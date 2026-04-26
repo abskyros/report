@@ -175,7 +175,14 @@ def load_all():
                 df["date"] = pd.to_datetime(df["date"]).dt.date
                 parts.append(df)
     if parts:
-        return pd.concat(parts).drop_duplicates("date").sort_values("date", ascending=False).reset_index(drop=True)
+        combined = pd.concat(parts)
+        # Αν υπάρχουν duplicates ίδιας ημέρας, κρατάμε τη μεγαλύτερη τιμή
+        combined = (combined
+                    .sort_values("net_sales", ascending=False)
+                    .drop_duplicates("date", keep="first")
+                    .sort_values("date", ascending=False)
+                    .reset_index(drop=True))
+        return combined
     return pd.DataFrame(columns=["date","net_sales","customers","avg_basket"])
 
 def extract_sales_from_pdf(pdf_bytes):
@@ -270,15 +277,36 @@ def preview_emails(password):
         errors.append(str(e))
     return results, errors
 
+def best_record_per_day(records):
+    """
+    Από πολλαπλά records για την ίδια ημέρα (duplicate emails),
+    κρατάμε αυτό με τη ΜΕΓΑΛΥΤΕΡΗ τιμή net_sales.
+    Λογική: το τελικό EOD report έχει τον υψηλότερο τζίρο.
+    """
+    by_date = {}
+    for rec in records:
+        d = rec["date"]
+        if d not in by_date:
+            by_date[d] = rec
+        else:
+            # Κρατάμε το record με τη μεγαλύτερη τιμή
+            if rec["net_sales"] > by_date[d]["net_sales"]:
+                by_date[d] = rec
+    return list(by_date.values())
+
 def fetch_emails(password, mode="quick"):
     """
     mode='quick' → emails μετά την τελευταία ημερομηνία (με OCR)
     mode='deep'  → emails τελευταίων 2 ετών (με OCR)
+
+    Για κάθε ημέρα που έχουν έρθει πολλαπλά emails (duplicates/re-sends),
+    κρατάμε αυτό με τη ΜΕΓΑΛΥΤΕΡΗ τιμή πωλήσεων (= τελικό EOD report).
     """
     df_existing = load_cache()
-    new_records = []
+    raw_records = []   # Όλα τα records πριν το dedup
     errors      = []
     emails_checked = 0
+    emails_with_data = 0
 
     if mode == "quick":
         limit = 200
@@ -318,14 +346,33 @@ def fetch_emails(password, mode="quick"):
 
                 rec = extract_sales_from_pdf(pdf_att.payload)
                 if rec["date"] and rec["net_sales"] is not None:
-                    if not df_existing.empty and rec["date"] in df_existing["date"].values:
-                        continue
-                    new_records.append(rec)
+                    emails_with_data += 1
+                    raw_records.append(rec)
 
     except Exception as e:
         errors.append(str(e))
 
-    return new_records, errors, emails_checked
+    # ── DEDUP: για κάθε ημέρα κρατάμε το record με τη μεγαλύτερη τιμή ──────
+    # (handles duplicate/re-sent emails for the same day)
+    deduped = best_record_per_day(raw_records)
+
+    # ── Αφαιρούμε ό,τι υπάρχει ήδη στο cache (με ίδια ή μεγαλύτερη τιμή) ──
+    new_records = []
+    for rec in deduped:
+        if df_existing.empty:
+            new_records.append(rec)
+            continue
+        existing_for_date = df_existing[df_existing["date"] == rec["date"]]
+        if existing_for_date.empty:
+            # Νέα ημερομηνία → προσθήκη
+            new_records.append(rec)
+        else:
+            # Υπάρχει ήδη → ενημέρωση ΜΟΝΟ αν η νέα τιμή είναι μεγαλύτερη
+            existing_val = existing_for_date["net_sales"].iloc[0]
+            if rec["net_sales"] > existing_val:
+                new_records.append(rec)
+
+    return new_records, errors, emails_checked, emails_with_data
 
 # ── LOAD DATA ─────────────────────────────────────────────────────────────────
 df    = load_all()
@@ -546,22 +593,28 @@ with tab_update:
     if mode and password:
         label = "Φόρτωση νέων emails + OCR..." if mode == "quick" else "Βαθιά σάρωση 2 ετών + OCR..."
         with st.spinner(label):
-            new_recs, errs, checked = fetch_emails(password, mode=mode)
+            new_recs, errs, checked, with_data = fetch_emails(password, mode=mode)
 
         if errs:
             st.error(f"❌ Σφάλμα: {errs[0]}")
         else:
-            st.markdown(f'<div class="info-box">📬 Ελέγχθηκαν: <b>{checked}</b> emails</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="info-box">📬 Ελέγχθηκαν: <b>{checked}</b> emails · με δεδομένα: <b>{with_data}</b></div>', unsafe_allow_html=True)
             if not new_recs:
-                st.markdown('<div class="info-box">✅ Δεν βρέθηκαν νέα δεδομένα — το σύστημα είναι ενημερωμένο.</div>', unsafe_allow_html=True)
+                st.markdown('<div class="info-box">✅ Δεν βρέθηκαν νέα/ενημερωμένα δεδομένα — το σύστημα είναι ενημερωμένο.</div>', unsafe_allow_html=True)
             else:
-                st.success(f"✅ Βρέθηκαν {len(new_recs)} νέες εγγραφές!")
+                st.success(f"✅ {len(new_recs)} νέες/ενημερωμένες εγγραφές!")
                 prev_df = pd.DataFrame(new_recs)
                 prev_df["date"] = prev_df["date"].apply(lambda d: d.strftime("%d/%m/%Y"))
                 st.dataframe(prev_df, use_container_width=True, hide_index=True)
+
+                # Merge: για κάθε ημέρα κρατάμε τη μεγαλύτερη τιμή
                 old_df  = load_cache()
                 all_new = pd.DataFrame(new_recs)
-                merged  = pd.concat([old_df, all_new]).drop_duplicates("date").sort_values("date", ascending=False).reset_index(drop=True)
+                if not old_df.empty:
+                    # Αφαιρούμε παλιές εγγραφές που αντικαθίστανται
+                    updated_dates = set(all_new["date"])
+                    old_df = old_df[~old_df["date"].isin(updated_dates)]
+                merged = pd.concat([old_df, all_new]).sort_values("date", ascending=False).reset_index(drop=True)
                 save_cache(merged)
                 st.rerun()
 
