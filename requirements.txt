@@ -1,6 +1,0 @@
-streamlit
-pandas
-imap-tools
-pdf2image
-pytesseract
-Pillow
