@@ -1,322 +1,200 @@
 import streamlit as st
 import pandas as pd
-import os, re
-from datetime import datetime, date, timedelta
-from imap_tools import MailBox, AND
-import logging
+import os
+from datetime import datetime
 
-logging.basicConfig(level=logging.WARNING)
-
-# ─── CONFIG ────────────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="AB Skyros — Business Hub",
+    page_title="AB Σκύρος 1082",
+    page_icon="🏪",
     layout="wide",
-    page_icon=None,
-    initial_sidebar_state="collapsed",  # Κρύβουμε την sidebar
+    initial_sidebar_state="collapsed"
 )
 
-HISTORY_FILE = "sales_history.csv"
-MONTHS_GR = ["Ιανουαριος","Φεβρουαριος","Μαρτιος","Απριλιος","Μαιος","Ιουνιος",
-              "Ιουλιος","Αυγουστος","Σεπτεμβριος","Οκτωβριος","Νοεμβριος","Δεκεμβριος"]
-DAYS_GR   = ["Δευτερα","Τριτη","Τεταρτη","Πεμπτη","Παρασκευη","Σαββατο","Κυριακη"]
-
-def fmt_euro(v):
-    if v is None or (isinstance(v, float) and pd.isna(v)): return "—"
-    return f"{v:,.2f}".replace(",","X").replace(".",",").replace("X",".") + " €"
-
-def load_history():
-    if os.path.exists(HISTORY_FILE):
-        df = pd.read_csv(HISTORY_FILE)
-        if not df.empty:
-            df["date"] = pd.to_datetime(df["date"]).dt.date
-        return df.sort_values("date", ascending=False).reset_index(drop=True)
-    return pd.DataFrame(columns=["date","netday","customers","avg_basket","depts"])
-
-def period_stats(df, start, end):
-    sub = df[(df["date"] >= start) & (df["date"] <= end)]
-    if sub.empty: return {"total":0,"avg_day":0,"days":0,"peak":None,"peak_val":0}
-    return {"total":sub["netday"].sum(),"avg_day":sub["netday"].mean(),
-            "days":len(sub),"peak":sub.loc[sub["netday"].idxmax(),"date"],
-            "peak_val":sub["netday"].max()}
-
-# ─── CSS - Responsive + Mobile Friendly ─────────────────────────────────────────
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
-*{box-sizing:border-box;}
-html,body,[class*="css"]{font-family:'Inter',sans-serif!important;}
-.stApp{background:#f0f2f5;}
-.block-container{padding:1rem 1rem 3rem!important;max-width:100%!important;}
-
-/* Hide Sidebar */
-section[data-testid="stSidebar"]{display:none!important;}
-
-#MainMenu,footer,header{visibility:hidden;}
-
-/* Header */
-.ph{background:#0f172a;border-radius:10px;padding:1rem;margin-bottom:1rem;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:1rem;}
-.ph-ey{font-size:.55rem;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:#60a5fa;margin-bottom:.2rem;}
-.ph-h1{font-size:1.3rem;font-weight:700;color:#f8fafc;margin:0;}
-.ph-rt{text-align:right;}
-.ph-lbl{font-size:.55rem;color:#475569;}
-.ph-val{font-family:'JetBrains Mono';font-size:.65rem;color:#64748b;}
-
-/* Module Cards Grid */
-.ng{display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem;}
-@media(max-width:768px){.ng{grid-template-columns:1fr;}}
-.nc{background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:1.2rem;position:relative;overflow:hidden;transition:box-shadow .15s;}
-.nc::after{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:var(--s,#2563eb);}
-.nc:hover{box-shadow:0 4px 16px rgba(0,0,0,.07);}
-.nc-mod{font-size:.55rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--s,#2563eb);margin-bottom:.4rem;}
-.nc-title{font-size:.95rem;font-weight:700;color:#0f172a;margin-bottom:.35rem;}
-.nc-desc{font-size:.7rem;color:#64748b;line-height:1.55;}
-.nc-tags{margin-top:.8rem;display:flex;gap:.35rem;flex-wrap:wrap;}
-.nc-tag{font-size:.55rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase;padding:.15rem .45rem;border-radius:4px;background:#eff6ff;color:#1d4ed8;}
-
-/* KPI Cards */
-.kr{display:grid;gap:.85rem;margin:.9rem 0;}
-.kr4{grid-template-columns:repeat(4,1fr);}
-.kr3{grid-template-columns:repeat(3,1fr);}
-.kr2{grid-template-columns:repeat(2,1fr);}
-@media(max-width:1024px){.kr4{grid-template-columns:repeat(2,1fr);}}
-@media(max-width:640px){.kr4,.kr3,.kr2{grid-template-columns:1fr;}}
-
-.kc{background:#fff;border:1px solid #e2e8f0;border-radius:9px;padding:.9rem 1rem;position:relative;overflow:hidden;}
-.kc::before{content:'';position:absolute;top:0;left:0;bottom:0;width:3px;background:var(--a,#2563eb);}
-.kl{font-size:.6rem;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:#94a3b8;margin-bottom:.35rem;}
-.kv{font-family:'JetBrains Mono';font-size:1rem;font-weight:500;color:#0f172a;line-height:1.1;}
-
-/* Section Headers */
-.sh{font-size:.65rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#94a3b8;border-bottom:1px solid #e2e8f0;padding-bottom:.45rem;margin:1.6rem 0 .8rem;}
-
-/* Badges */
-.bn{border-radius:7px;padding:.6rem .9rem;font-size:.75rem;font-weight:500;margin:.6rem 0;display:flex;align-items:center;gap:.5rem;}
-.bn-ok{background:#f0fdf4;border:1px solid #bbf7d0;color:#15803d;}
-.bn-warn{background:#fffbeb;border:1px solid #fde68a;color:#92400e;}
-.bn-info{background:#eff6ff;border:1px solid #bfdbfe;color:#1e40af;}
-
-/* Divider */
-.div{border:none;border-top:1px solid #e2e8f0;margin:1.8rem 0;}
-
-/* Buttons */
-.stButton>button{background:#2563eb!important;color:#fff!important;border:none!important;border-radius:7px!important;font-weight:600!important;font-size:.8rem!important;padding:.45rem 1rem!important;}
-.stButton>button:hover{background:#1d4ed8!important;}
-button[kind="secondary"]{background:#fff!important;color:#374151!important;border:1px solid #d1d5db!important;}
-
-/* Tables & DataFrames */
-[data-testid="stDataFrame"]{border:1px solid #e2e8f0;border-radius:9px;overflow:hidden;}
-[data-baseweb="select"]>div{background:#fff!important;border-color:#d1d5db!important;}
-
-/* Mobile optimizations */
-@media(max-width:640px){
-  .ph{padding:.8rem;flex-direction:column;align-items:flex-start;}
-  .ph-h1{font-size:1.1rem;}
-  .kv{font-size:.9rem;}
-  .nc{padding:1rem;}
-  .sh{margin:1.2rem 0 .6rem;}
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500&display=swap');
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body, [class*="css"] {
+    font-family: 'DM Sans', sans-serif !important;
+    background: #0a0a0f !important;
+    color: #e8e4dc !important;
 }
-
-/* Email Check Info */
-.email-list{background:#fff;border:1px solid #e2e8f0;border-radius:9px;padding:1rem;max-height:400px;overflow-y:auto;}
-.email-item{padding:.6rem;border-bottom:1px solid #f0f0f0;font-size:.75rem;}
-.email-item:last-child{border-bottom:none;}
-.email-from{font-weight:600;color:#0f172a;}
-.email-subject{color:#475569;margin-top:.2rem;word-break:break-word;}
-.email-date{font-size:.65rem;color:#94a3b8;margin-top:.2rem;}
+.stApp { background: #0a0a0f !important; }
+section[data-testid="stSidebar"] { display: none !important; }
+#MainMenu, footer, header { visibility: hidden !important; }
+.block-container { padding: 0 !important; max-width: 100% !important; }
+.page-wrap { min-height: 100vh; padding: 2rem 1.5rem 4rem; max-width: 860px; margin: 0 auto; }
+.top-bar { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 2.5rem; padding-bottom: 1.5rem; border-bottom: 1px solid rgba(255,255,255,0.07); }
+.brand-tag { font-family: 'Syne', sans-serif; font-size: 0.6rem; font-weight: 600; letter-spacing: 0.25em; text-transform: uppercase; color: #5a9f7a; }
+.brand-title { font-family: 'Syne', sans-serif; font-size: 1.55rem; font-weight: 800; color: #f5f0e8; line-height: 1.1; margin-top: 0.2rem; }
+.top-right { text-align: right; }
+.date-label { font-size: 0.58rem; letter-spacing: 0.12em; text-transform: uppercase; color: rgba(255,255,255,0.25); }
+.date-val { font-family: 'Syne', sans-serif; font-size: 0.8rem; color: rgba(255,255,255,0.45); margin-top: 0.2rem; }
+.card-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.2rem; }
+.dash-card { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.09); border-radius: 16px; padding: 1.4rem; position: relative; overflow: hidden; }
+.dash-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: var(--acc); border-radius: 16px 16px 0 0; }
+.card-sales { --acc: linear-gradient(90deg,#5a9f7a,#3d8a63); }
+.card-inv { --acc: linear-gradient(90deg,#6b8fd4,#4a72c4); }
+.card-icon { font-size: 1.4rem; margin-bottom: 0.6rem; }
+.card-label { font-size: 0.56rem; font-weight: 600; letter-spacing: 0.2em; text-transform: uppercase; color: rgba(255,255,255,0.3); margin-bottom: 0.25rem; }
+.card-title { font-family: 'Syne', sans-serif; font-size: 1rem; font-weight: 700; color: #f5f0e8; margin-bottom: 0.85rem; }
+.card-stat { border-top: 1px solid rgba(255,255,255,0.06); padding-top: 0.85rem; }
+.stat-lbl { font-size: 0.58rem; letter-spacing: 0.1em; text-transform: uppercase; color: rgba(255,255,255,0.28); margin-bottom: 0.15rem; }
+.stat-val { font-family: 'Syne', sans-serif; font-size: 1.3rem; font-weight: 700; color: #f5f0e8; }
+.stat-sub { font-size: 0.62rem; color: rgba(255,255,255,0.3); margin-top: 0.1rem; }
+.stat-empty { font-size: 0.7rem; color: rgba(255,255,255,0.18); font-style: italic; }
+.dot-row { display: flex; align-items: center; gap: 0.35rem; margin-top: 0.45rem; }
+.dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.dot-ok { background: #5a9f7a; }
+.dot-warn { background: #c9874a; }
+.dot-off { background: rgba(255,255,255,0.15); }
+.dot-txt { font-size: 0.58rem; color: rgba(255,255,255,0.28); }
+.stButton > button { width: 100% !important; border-radius: 10px !important; font-family: 'DM Sans', sans-serif !important; font-size: 0.82rem !important; padding: 0.7rem 1rem !important; transition: all 0.2s !important; }
+.btn-g > button { background: #5a9f7a !important; border: none !important; color: #0a0a0f !important; font-weight: 700 !important; }
+.btn-g > button:hover { background: #4d8f6d !important; }
+.btn-b > button { background: #6b8fd4 !important; border: none !important; color: #0a0a0f !important; font-weight: 700 !important; }
+.btn-b > button:hover { background: #5a80c8 !important; }
+.info { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.07); border-radius: 10px; padding: 0.8rem 1rem; font-size: 0.72rem; color: rgba(255,255,255,0.3); margin-top: 1.2rem; }
+@media(max-width:640px){
+  .card-grid { grid-template-columns: 1fr; }
+  .page-wrap { padding: 1.2rem 1rem 3rem; }
+  .brand-title { font-size: 1.25rem; }
+  .top-bar { flex-direction: column; gap: 0.5rem; }
+  .top-right { text-align: left; }
+}
 </style>
 """, unsafe_allow_html=True)
 
-# ─── SESSION STATE ──────────────────────────────────────────────────────────────
-if "emails_checked" not in st.session_state:
-    st.session_state.emails_checked = False
-if "emails_list" not in st.session_state:
-    st.session_state.emails_list = []
+# ─── HELPERS ─────────────────────────────────────────────────────────────────
+SALES_CACHE = "sales_cache.csv"
+INV_CACHE   = "invoices_cache.csv"
+MONTHS_GR = ["Ιαν","Φεβ","Μαρ","Απρ","Μαι","Ιουν","Ιουλ","Αυγ","Σεπ","Οκτ","Νοε","Δεκ"]
+DAYS_GR   = ["Δευτέρα","Τρίτη","Τετάρτη","Πέμπτη","Παρασκευή","Σάββατο","Κυριακή"]
 
-# ─── HEADER ─────────────────────────────────────────────────────────────────────
-today = date.today()
+def fmt(v):
+    if v is None or (isinstance(v, float) and pd.isna(v)): return "—"
+    return f"{v:,.2f}€".replace(",","X").replace(".",",").replace("X",".")
+
+def load_sales():
+    if os.path.exists(SALES_CACHE):
+        df = pd.read_csv(SALES_CACHE)
+        if not df.empty:
+            df["date"] = pd.to_datetime(df["date"]).dt.date
+            return df.sort_values("date", ascending=False).reset_index(drop=True)
+    return pd.DataFrame(columns=["date","net_sales","customers","avg_basket"])
+
+def load_inv():
+    if os.path.exists(INV_CACHE):
+        df = pd.read_csv(INV_CACHE)
+        if not df.empty:
+            df["DATE"] = pd.to_datetime(df["DATE"])
+        return df
+    return pd.DataFrame(columns=["DATE","TYPE","VALUE"])
+
+# ─── DATA ────────────────────────────────────────────────────────────────────
+today = datetime.now().date()
+df_s  = load_sales()
+df_i  = load_inv()
+
+last_val = last_date = last_cust = days_ago = None
+if not df_s.empty:
+    r = df_s.iloc[0]
+    last_val  = r["net_sales"]
+    last_date = r["date"]
+    last_cust = int(r["customers"]) if pd.notna(r.get("customers")) else None
+    days_ago  = (today - last_date).days
+
+inv_month_net = None
+if not df_i.empty:
+    m_mask = (df_i["DATE"].dt.month == today.month) & (df_i["DATE"].dt.year == today.year)
+    m_df   = df_i[m_mask]
+    if not m_df.empty:
+        _inv = m_df[~m_df["TYPE"].str.contains("ΠΙΣΤΩΤΙΚΟ", na=False)]["VALUE"].sum()
+        _crd = m_df[ m_df["TYPE"].str.contains("ΠΙΣΤΩΤΙΚΟ", na=False)]["VALUE"].sum()
+        inv_month_net = _inv - _crd
+
+# ─── BUILD CARD HTML ─────────────────────────────────────────────────────────
+day_str = f"{DAYS_GR[today.weekday()]}, {today.day} {MONTHS_GR[today.month-1]} {today.year}"
+
+# Sales card content
+if last_val is not None:
+    s_stat = f"""
+      <div class="stat-lbl">Τελευταία πώληση · {last_date.strftime('%d/%m/%Y')}</div>
+      <div class="stat-val">{fmt(last_val)}</div>
+      <div class="stat-sub">{f'{last_cust} πελάτες' if last_cust else ''}</div>
+    """
+    if days_ago == 0:   s_dot, s_dtxt = "dot dot-ok", "Ενημερωμένο σήμερα"
+    elif days_ago <= 2: s_dot, s_dtxt = "dot dot-warn", f"Πριν {days_ago} μέρες"
+    else:               s_dot, s_dtxt = "dot dot-off", f"Πριν {days_ago} μέρες"
+else:
+    s_stat = '<div class="stat-empty">Δεν υπάρχουν δεδομένα — πατήστε για φόρτωση</div>'
+    s_dot, s_dtxt = "dot dot-off", "Εκκρεμεί ενημέρωση"
+
+# Invoice card content
+mn = MONTHS_GR[today.month-1]
+if inv_month_net is not None:
+    i_stat = f"""
+      <div class="stat-lbl">Καθαρό σύνολο · {mn} {today.year}</div>
+      <div class="stat-val">{fmt(inv_month_net)}</div>
+      <div class="stat-sub">Τιμολόγια − Πιστωτικά</div>
+    """
+    i_dot, i_dtxt = "dot dot-ok", "Ενημερωμένο"
+else:
+    i_stat = '<div class="stat-empty">Δεν υπάρχουν δεδομένα — πατήστε για φόρτωση</div>'
+    i_dot, i_dtxt = "dot dot-off", "Εκκρεμεί φόρτωση"
+
+# ─── RENDER ──────────────────────────────────────────────────────────────────
+st.markdown('<div class="page-wrap">', unsafe_allow_html=True)
+
 st.markdown(f"""
-<div class="ph">
+<div class="top-bar">
   <div>
-    <div class="ph-ey">AB Skyros — Καταστημα 1082</div>
-    <div class="ph-h1">Business Hub</div>
+    <div class="brand-tag">AB Σκύρος · Κατάστημα 1082</div>
+    <div class="brand-title">Business Hub</div>
   </div>
-  <div class="ph-rt">
-    <div class="ph-lbl">Σημερα</div>
-    <div class="ph-val">{DAYS_GR[today.weekday()]}, {today.day} {MONTHS_GR[today.month-1]} {today.year}</div>
+  <div class="top-right">
+    <div class="date-label">Σήμερα</div>
+    <div class="date-val">{day_str}</div>
+  </div>
+</div>
+<div class="card-grid">
+  <div class="dash-card card-sales">
+    <div class="card-icon">📊</div>
+    <div class="card-label">Ενότητα 1</div>
+    <div class="card-title">Πωλήσεις Καταστήματος</div>
+    <div class="card-stat">
+      {s_stat}
+      <div class="dot-row"><div class="{s_dot}"></div><span class="dot-txt">{s_dtxt}</span></div>
+    </div>
+  </div>
+  <div class="dash-card card-inv">
+    <div class="card-icon">📄</div>
+    <div class="card-label">Ενότητα 2</div>
+    <div class="card-title">Έλεγχος Τιμολογίων</div>
+    <div class="card-stat">
+      {i_stat}
+      <div class="dot-row"><div class="{i_dot}"></div><span class="dot-txt">{i_dtxt}</span></div>
+    </div>
   </div>
 </div>
 """, unsafe_allow_html=True)
 
-# ─── MODULE CARDS ───────────────────────────────────────────────────────────────
-st.markdown('<div class="sh">Ενοτητες</div>', unsafe_allow_html=True)
+c1, c2 = st.columns(2)
+with c1:
+    st.markdown('<div class="btn-g">', unsafe_allow_html=True)
+    if st.button("📊  Πωλήσεις  →", use_container_width=True, key="nav_sales"):
+        st.switch_page("pages/1_Πωλήσεις.py")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+with c2:
+    st.markdown('<div class="btn-b">', unsafe_allow_html=True)
+    if st.button("📄  Τιμολόγια  →", use_container_width=True, key="nav_inv"):
+        st.switch_page("pages/2_Τιμολόγια.py")
+    st.markdown("</div>", unsafe_allow_html=True)
+
 st.markdown("""
-<div class="ng">
-  <div class="nc" style="--s:#2563eb;">
-    <div class="nc-mod">Sales Analytics</div>
-    <div class="nc-title">Πωλησεις Καταστηματος</div>
-    <div class="nc-desc">Ημερησιος τζιρος, αριθμος πελατων, αναλυση τμηματων και συγκρισεις περιοδων.</div>
-    <div class="nc-tags"><span class="nc-tag">Daily Sales</span><span class="nc-tag">OCR</span><span class="nc-tag">Departments</span></div>
-  </div>
-  <div class="nc" style="--s:#0891b2;">
-    <div class="nc-mod" style="color:#0891b2;">Invoices</div>
-    <div class="nc-title">Ελεγχος Τιμολογιων</div>
-    <div class="nc-desc">Παρακολουθηση τιμολογιων και πιστωτικων εγγραφων. Εβδομαδιαια και μηνιαια εικονα.</div>
-    <div class="nc-tags"><span class="nc-tag" style="background:#ecfeff;color:#0e7490;">Weekly</span><span class="nc-tag" style="background:#ecfeff;color:#0e7490;">Monthly</span><span class="nc-tag" style="background:#ecfeff;color:#0e7490;">Export</span></div>
-  </div>
+<div class="info">
+  ℹ️ &nbsp;Τα δεδομένα ενημερώνονται αυτόματα από email. Μπείτε σε κάθε ενότητα για αναλυτικά στοιχεία, ιστορικό και χειροκίνητη ανανέωση.
+</div>
 </div>
 """, unsafe_allow_html=True)
-
-ca, cb = st.columns(2)
-with ca:
-    if st.button("Sales Analytics →", use_container_width=True):
-        st.switch_page("pages/1_Sales.py")
-with cb:
-    if st.button("Invoices →", use_container_width=True, type="secondary"):
-        st.switch_page("pages/2_Invoices.py")
-
-st.markdown('<hr class="div"/>', unsafe_allow_html=True)
-
-# ─── EMAIL CHECKING SECTION ─────────────────────────────────────────────────────
-st.markdown('<div class="sh">🔍 Έλεγχος Email — Πρώτα 20</div>', unsafe_allow_html=True)
-
-with st.expander("**📧 Διαβάστε τα emails για έλεγχο**", expanded=False):
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        email = st.text_input("Email διεύθυνση", placeholder="your@email.com", key="email_input")
-    with col2:
-        password = st.text_input("Κωδικός", type="password", key="pass_input")
-    
-    if st.button("✓ Διαβάστε τα πρώτα 20 emails", use_container_width=True):
-        if not email or not password:
-            st.error("Εισάγετε email και κωδικό")
-        else:
-            with st.spinner("Σύνδεση με mail server..."):
-                try:
-                    mb = MailBox('imap.gmail.com')
-                    mb.login(email, password)
-                    
-                    # Διαβάζουμε τα 20 πρώτα emails
-                    messages = list(mb.fetch(limit=20, reverse=True))
-                    
-                    emails_data = []
-                    for msg in messages:
-                        emails_data.append({
-                            "from": msg.from_,
-                            "subject": msg.subject,
-                            "date": msg.date
-                        })
-                    
-                    st.session_state.emails_list = emails_data
-                    st.session_state.emails_checked = True
-                    mb.logout()
-                    
-                    st.success(f"✓ Διαβάστηκαν {len(emails_data)} emails!")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"❌ Σφάλμα: {str(e)}")
-
-# Εμφανίζουμε τα emails αν έχουν διαβαστεί
-if st.session_state.emails_checked and st.session_state.emails_list:
-    st.markdown('<div style="margin-top:1rem;"><strong>Λίστα Emails:</strong></div>', unsafe_allow_html=True)
-    st.markdown('<div class="email-list">', unsafe_allow_html=True)
-    for idx, email_data in enumerate(st.session_state.emails_list, 1):
-        st.markdown(f'''
-        <div class="email-item">
-            <span class="email-from">#{idx} {email_data["from"]}</span>
-            <div class="email-subject">📌 {email_data["subject"][:70]}...</div>
-            <div class="email-date">📅 {email_data["date"].strftime("%d/%m/%Y %H:%M") if email_data["date"] else "—"}</div>
-        </div>
-        ''', unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
-
-st.markdown('<hr class="div"/>', unsafe_allow_html=True)
-
-# ─── SALES SNAPSHOT ─────────────────────────────────────────────────────────────
-st.markdown('<div class="sh">Sales Analytics — Συνοψη</div>', unsafe_allow_html=True)
-df_s = load_history()
-
-if not df_s.empty:
-    last     = df_s.iloc[0]
-    prev     = df_s.iloc[1] if len(df_s) > 1 else None
-    ld       = last["date"]
-    days_old = (today - ld).days
-    cur_total = period_stats(df_s, date(today.year,today.month,1), today)["total"]
-
-    if days_old == 0:
-        st.markdown('<div class="bn bn-ok">✓ Ενημερωμενο — τελευταια αναφορα σημερα</div>', unsafe_allow_html=True)
-    else:
-        st.markdown(f'<div class="bn bn-warn">⚠ Τελευταια αναφορα: {ld.strftime("%d/%m/%Y")} ({days_old} ημερες πισω)</div>', unsafe_allow_html=True)
-
-    def delta(now, pv, euro=True):
-        if pv is None or pv == 0: return ""
-        diff = now - pv; pct = diff/pv*100
-        col = "#059669" if diff >= 0 else "#dc2626"
-        sym = "▲" if diff >= 0 else "▼"
-        return f'<div style="font-size:.65rem;color:{col};margin-top:.25rem;">{sym} {"+" if diff>=0 else ""}{pct:.1f}%</div>'
-
-    p_net = prev["netday"]    if prev is not None else None
-    p_cus = prev["customers"] if prev is not None else None
-    p_avg = prev["avg_basket"]if prev is not None else None
-
-    st.markdown(f"""<div class="kr kr4">
-      <div class="kc" style="--a:#2563eb"><div class="kl">Πωλησεις {ld.strftime('%d/%m')}</div><div class="kv">{fmt_euro(last['netday'])}</div>{delta(last['netday'],p_net)}</div>
-      <div class="kc" style="--a:#7c3aed"><div class="kl">Πελατες</div><div class="kv">{int(last['customers']) if pd.notna(last['customers']) else '—'}</div>{delta(last['customers'],p_cus,False)}</div>
-      <div class="kc" style="--a:#0891b2"><div class="kl">ΜΟ Καλαθιου</div><div class="kv">{fmt_euro(last['avg_basket'])}</div>{delta(last['avg_basket'],p_avg)}</div>
-      <div class="kc" style="--a:#059669"><div class="kl">Μηνιαιο ({MONTHS_GR[today.month-1][:3]})</div><div class="kv">{fmt_euro(cur_total)}</div></div>
-    </div>""", unsafe_allow_html=True)
-
-    ch = df_s[df_s["date"] >= (today - timedelta(days=13))].sort_values("date").copy()
-    if not ch.empty:
-        ch["D"] = ch["date"].apply(lambda d: d.strftime("%d/%m"))
-        st.bar_chart(ch.set_index("D")["netday"], color="#2563eb", use_container_width=True, height=180)
-else:
-    st.markdown('<div class="bn bn-info">ℹ Δεν υπαρχουν δεδομενα πωλησεων. Μεταβειτε στο Sales Analytics.</div>', unsafe_allow_html=True)
-
-st.markdown('<hr class="div"/>', unsafe_allow_html=True)
-
-# ─── INVOICE SNAPSHOT ───────────────────────────────────────────────────────────
-st.markdown('<div class="sh">Τιμολογια — Συνοψη</div>', unsafe_allow_html=True)
-inv_df = st.session_state.get("invoice_data", pd.DataFrame())
-
-if not inv_df.empty:
-    ws = today - timedelta(days=today.weekday())
-    w_mask = (inv_df["DATE"].dt.date >= ws) & (inv_df["DATE"].dt.date <= today)
-    m_mask = (inv_df["DATE"].dt.month == today.month) & (inv_df["DATE"].dt.year == today.year)
-    w_inv = inv_df[w_mask & ~inv_df["TYPE"].str.contains("ΠΙΣΤΩΤΙΚΟ",na=False)]["VALUE"].sum()
-    w_crd = inv_df[w_mask &  inv_df["TYPE"].str.contains("ΠΙΣΤΩΤΙΚΟ",na=False)]["VALUE"].sum()
-    m_inv = inv_df[m_mask & ~inv_df["TYPE"].str.contains("ΠΙΣΤΩΤΙΚΟ",na=False)]["VALUE"].sum()
-    m_crd = inv_df[m_mask &  inv_df["TYPE"].str.contains("ΠΙΣΤΩΤΙΚΟ",na=False)]["VALUE"].sum()
-    st.markdown(f"""<div class="kr kr4">
-      <div class="kc" style="--a:#0891b2"><div class="kl">Τιμολογια Εβδ.</div><div class="kv">{fmt_euro(w_inv)}</div></div>
-      <div class="kc" style="--a:#dc2626"><div class="kl">Πιστωτικα Εβδ.</div><div class="kv">{fmt_euro(w_crd)}</div></div>
-      <div class="kc" style="--a:#0891b2"><div class="kl">Τιμολογια Μηνα</div><div class="kv">{fmt_euro(m_inv)}</div></div>
-      <div class="kc" style="--a:#059669"><div class="kl">Καθαρο Μηνα</div><div class="kv">{fmt_euro(m_inv-m_crd)}</div></div>
-    </div>""", unsafe_allow_html=True)
-else:
-    st.markdown('<div class="bn bn-info">ℹ Τα τιμολογια δεν εχουν φορτωθει. Μεταβειτε στην ενοτητα Invoices.</div>', unsafe_allow_html=True)
-
-st.markdown('<hr class="div"/>', unsafe_allow_html=True)
-
-# ─── COMBINED TOTAL SUMMARY ─────────────────────────────────────────────────────
-st.markdown('<div class="sh">📊 Συνολικο Καθαρο Τζιρο (Sales + Invoices)</div>', unsafe_allow_html=True)
-
-sales_month = 0
-invoices_net_month = 0
-
-if not df_s.empty:
-    cur_stats = period_stats(df_s, date(today.year,today.month,1), today)
-    sales_month = cur_stats["total"]
-
-if not inv_df.empty:
-    m_mask = (inv_df["DATE"].dt.month == today.month) & (inv_df["DATE"].dt.year == today.year)
-    m_inv = inv_df[m_mask & ~inv_df["TYPE"].str.contains("ΠΙΣΤΩΤΙΚΟ",na=False)]["VALUE"].sum()
-    m_crd = inv_df[m_mask &  inv_df["TYPE"].str.contains("ΠΙΣΤΩΤΙΚΟ",na=False)]["VALUE"].sum()
-    invoices_net_month = m_inv - m_crd
-
-total_net = sales_month + invoices_net_month
-
-st.markdown(f"""<div class="kr kr3">
-  <div class="kc" style="--a:#2563eb"><div class="kl">Sales Μηνα</div><div class="kv">{fmt_euro(sales_month)}</div></div>
-  <div class="kc" style="--a:#0891b2"><div class="kl">Invoices Καθαρο</div><div class="kv">{fmt_euro(invoices_net_month)}</div></div>
-  <div class="kc" style="--a:#059669;border-left:4px solid #059669;"><div class="kl">🎯 Συνολο</div><div class="kv" style="color:#059669;font-weight:700;">{fmt_euro(total_net)}</div></div>
-</div>""", unsafe_allow_html=True)
