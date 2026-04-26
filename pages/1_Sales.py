@@ -250,24 +250,40 @@ def extract_sales_from_pdf(pdf_bytes):
         st.warning(f"OCR error: {e}")
     return result
 
-def fetch_emails(password, mode="test"):
+def preview_emails(password):
+    """ΔΟΚΙΜΗ: Εμφανίζει τα τελευταία 20 emails χωρίς OCR."""
+    results = []
+    errors  = []
+    try:
+        with MailBox("imap.gmail.com").login(SALES_EMAIL_USER, password) as mb:
+            messages = list(mb.fetch(AND(from_=SALES_EMAIL_SENDER),
+                                     limit=TEST_EMAIL_LIMIT, reverse=True,
+                                     mark_seen=False))
+            for msg in messages:
+                att_names = [a.filename for a in msg.attachments if a.filename] or ["—"]
+                results.append({
+                    "Ημερομηνία": msg.date.strftime("%d/%m/%Y %H:%M") if msg.date else "—",
+                    "Θέμα": (msg.subject or "")[:60],
+                    "Attachment": att_names[0],
+                })
+    except Exception as e:
+        errors.append(str(e))
+    return results, errors
+
+def fetch_emails(password, mode="quick"):
     """
-    mode='test'  → μόνο τα τελευταία 20 emails (για δοκιμή)
-    mode='quick' → emails μετά την τελευταία ημερομηνία
-    mode='deep'  → emails τελευταίων 2 ετών
+    mode='quick' → emails μετά την τελευταία ημερομηνία (με OCR)
+    mode='deep'  → emails τελευταίων 2 ετών (με OCR)
     """
     df_existing = load_cache()
     new_records = []
     errors      = []
     emails_checked = 0
 
-    if mode == "test":
-        limit = TEST_EMAIL_LIMIT
-        since_date = None
-    elif mode == "quick":
+    if mode == "quick":
         limit = 200
         if not df_existing.empty:
-            last_dt   = df_existing["date"].min()
+            last_dt    = df_existing["date"].min()
             since_date = last_dt - timedelta(days=3)
         else:
             since_date = None
@@ -278,22 +294,20 @@ def fetch_emails(password, mode="test"):
     try:
         with MailBox("imap.gmail.com").login(SALES_EMAIL_USER, password) as mb:
             criteria = AND(from_=SALES_EMAIL_SENDER)
-            messages = list(mb.fetch(criteria, limit=limit, reverse=True))
+            messages = list(mb.fetch(criteria, limit=limit, reverse=True,
+                                     mark_seen=False))
 
             for msg in messages:
                 emails_checked += 1
                 msg_date = msg.date.date() if msg.date else None
 
-                # Skip αν πολύ παλιό
                 if since_date and msg_date and msg_date < since_date:
                     continue
 
-                # Έλεγχος subject
                 subj = (msg.subject or "").upper()
                 if SALES_SUBJECT_KW not in subj and "SKYROS" not in subj:
                     continue
 
-                # Ένα PDF ανά email
                 pdf_att = next(
                     (a for a in msg.attachments
                      if a.filename and a.filename.lower().endswith(".pdf")),
@@ -304,7 +318,6 @@ def fetch_emails(password, mode="test"):
 
                 rec = extract_sales_from_pdf(pdf_att.payload)
                 if rec["date"] and rec["net_sales"] is not None:
-                    # Skip αν ήδη στο cache
                     if not df_existing.empty and rec["date"] in df_existing["date"].values:
                         continue
                     new_records.append(rec)
@@ -504,38 +517,49 @@ with tab_update:
     password = st.text_input("🔐 Gmail App Password", type="password", key="sales_pw")
 
     c1, c2, c3 = st.columns(3)
-    run_test  = c1.button(f"🧪 Δοκιμή {TEST_EMAIL_LIMIT} Emails", use_container_width=True)
-    run_quick = c2.button("⚡ Γρήγορη (Νέα μόνο)", use_container_width=True)
-    run_deep  = c3.button("🔍 Βαθιά Σάρωση (2 χρόνια)", use_container_width=True)
+    run_preview = c1.button(f"👁 Δοκιμή — Εμφάνιση {TEST_EMAIL_LIMIT} Emails", use_container_width=True)
+    run_quick   = c2.button("⚡ Γρήγορη Ενημέρωση (Νέα)", use_container_width=True)
+    run_deep    = c3.button("🔍 Βαθιά Σάρωση (2 χρόνια)", use_container_width=True)
 
+    # ── ΔΟΚΙΜΗ: Εμφανίζει emails ΧΩΡΙΣ OCR (γρήγορο) ────────────────────────
+    if run_preview and password:
+        with st.spinner(f"Σύνδεση και ανάκτηση {TEST_EMAIL_LIMIT} emails..."):
+            preview, errs = preview_emails(password)
+        if errs:
+            st.error(f"❌ Σφάλμα σύνδεσης: {errs[0]}")
+        elif not preview:
+            st.markdown('<div class="warn-box">⚠️ Δεν βρέθηκαν emails από αυτόν τον αποστολέα.</div>', unsafe_allow_html=True)
+        else:
+            st.success(f"✅ Σύνδεση επιτυχής! Βρέθηκαν {len(preview)} emails.")
+            st.markdown('<div class="info-box">👇 Λίστα emails — επιβεβαιώστε ότι έχουν το σωστό PDF attachment.</div>', unsafe_allow_html=True)
+            st.dataframe(pd.DataFrame(preview), use_container_width=True, hide_index=True)
+            st.markdown('<div class="test-box">✅ Η σύνδεση λειτουργεί! Τώρα πατήστε <b>Γρήγορη Ενημέρωση</b> για να ξεκινήσει το OCR και η αποθήκευση δεδομένων.</div>', unsafe_allow_html=True)
+
+    elif run_preview and not password:
+        st.error("⚠️ Εισάγετε App Password.")
+
+    # ── ΕΝΗΜΕΡΩΣΗ ΜΕ OCR ─────────────────────────────────────────────────────
     mode = None
-    if run_test:  mode = "test"
     if run_quick: mode = "quick"
     if run_deep:  mode = "deep"
 
     if mode and password:
-        labels = {"test": f"Δοκιμή τελευταίων {TEST_EMAIL_LIMIT} emails...",
-                  "quick": "Φόρτωση νέων emails...",
-                  "deep": "Βαθιά σάρωση 2 ετών..."}
-        with st.spinner(labels[mode]):
+        label = "Φόρτωση νέων emails + OCR..." if mode == "quick" else "Βαθιά σάρωση 2 ετών + OCR..."
+        with st.spinner(label):
             new_recs, errs, checked = fetch_emails(password, mode=mode)
 
         if errs:
-            st.error(f"❌ Σφάλμα σύνδεσης: {errs[0]}")
+            st.error(f"❌ Σφάλμα: {errs[0]}")
         else:
             st.markdown(f'<div class="info-box">📬 Ελέγχθηκαν: <b>{checked}</b> emails</div>', unsafe_allow_html=True)
             if not new_recs:
                 st.markdown('<div class="info-box">✅ Δεν βρέθηκαν νέα δεδομένα — το σύστημα είναι ενημερωμένο.</div>', unsafe_allow_html=True)
             else:
                 st.success(f"✅ Βρέθηκαν {len(new_recs)} νέες εγγραφές!")
-
-                # Εμφάνιση προεπισκόπησης
                 prev_df = pd.DataFrame(new_recs)
                 prev_df["date"] = prev_df["date"].apply(lambda d: d.strftime("%d/%m/%Y"))
                 st.dataframe(prev_df, use_container_width=True, hide_index=True)
-
-                # Αποθήκευση
-                old_df = load_cache()
+                old_df  = load_cache()
                 all_new = pd.DataFrame(new_recs)
                 merged  = pd.concat([old_df, all_new]).drop_duplicates("date").sort_values("date", ascending=False).reset_index(drop=True)
                 save_cache(merged)
