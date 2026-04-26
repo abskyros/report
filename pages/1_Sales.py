@@ -206,26 +206,33 @@ def fetch_emails_incremental(password, full_scan=False):
 
     if not full_scan and not df_existing.empty:
         last_date   = df_existing["date"].max()
-        cutoff_date = last_date - timedelta(days=3)
+        cutoff_date = last_date - timedelta(days=5) # Ψάχνει μόνο 5 μέρες πίσω (ΤΑΧΥΤΑΤΟ!)
 
     cutoff_year = date.today().year - DEEP_SCAN_YEARS if full_scan else None
 
     new_records = []
     errors = []
     
-    # 20 emails για τη γρήγορη σάρωση, None για όλα στη βαθιά
     limit = None if full_scan else 20
     
     print(f"\n--- ΕΝΑΡΞΗ {'ΒΑΘΙΑΣ' if full_scan else 'ΓΡΗΓΟΡΗΣ'} ΣΑΡΩΣΗΣ ---")
 
     try:
-        # TIMEOUT στα 15 δευτερόλεπτα για να μην κολλάει η εφαρμογή αν αργεί το δίκτυο
+        # TIMEOUT στα 15 δευτερόλεπτα
         with MailBox("imap.gmail.com").login(SALES_EMAIL_USER, password, timeout=15) as mb:
-            print("✅ Σύνδεση στο Gmail επιτυχής.")
+            print("✅ Σύνδεση στο Gmail επιτυχής. Ξεκινάει η αναζήτηση...")
             
-            criteria = AND(from_=SALES_EMAIL_SENDER)
+            # --- ΕΔΩ ΕΙΝΑΙ ΤΟ ΜΥΣΤΙΚΟ ΤΗΣ ΤΑΧΥΤΗΤΑΣ ---
+            # Λέμε στον server του Gmail να ψάξει ΜΟΝΟ τα πρόσφατα email
+            if not full_scan and cutoff_date:
+                criteria = AND(from_=SALES_EMAIL_SENDER, date_gte=cutoff_date)
+                print(f"🔍 Αναζήτηση στο Gmail ΑΥΣΤΗΡΑ από: {cutoff_date.strftime('%d/%m/%Y')}")
+            elif full_scan and cutoff_year:
+                criteria = AND(from_=SALES_EMAIL_SENDER, date_gte=date(cutoff_year, 1, 1))
+                print(f"🔍 Βαθιά αναζήτηση στο Gmail από το έτος {cutoff_year}")
+            else:
+                criteria = AND(from_=SALES_EMAIL_SENDER)
             
-            # Αντί για list(), διαβάζουμε απ' ευθείας από τον server (γλιτώνουμε RAM)
             for i, msg in enumerate(mb.fetch(criteria, reverse=True, limit=limit)):
                 msg_date = msg.date.date() if msg.date else None
                 print(f"[{i+1}] Ελέγχεται email από: {msg_date}")
@@ -234,7 +241,7 @@ def fetch_emails_incremental(password, full_scan=False):
                     continue
 
                 if not full_scan and cutoff_date and msg_date and msg_date < cutoff_date:
-                    print("  ↳ Υπάρχει ήδη στο σύστημα. Προσπέραση.")
+                    print("  ↳ Παλιό email. Προσπέραση.")
                     continue
 
                 subj = msg.subject or ""
