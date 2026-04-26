@@ -15,7 +15,7 @@ SALES_EMAIL_SENDER = "abf.skyros@gmail.com"
 SALES_SUBJECT_KW   = "ΑΒ ΣΚΥΡΟΣ"
 SALES_CACHE        = "sales_cache.csv"
 SALES_ARCHIVE      = "sales_archive.csv"   # παλαιότερα από 2 χρόνια
-DEEP_SCAN_YEARS    = 2                      # βαθιά σάρωση τελευταίων 2 ετών
+DEEP_SCAN_YEARS    = 2                     # βαθιά σάρωση τελευταίων 2 ετών
 
 # ── CSS ───────────────────────────────────────────────────────────────────────
 st.markdown("""
@@ -69,7 +69,6 @@ def load_cache():
     return pd.DataFrame(columns=["date","net_sales","customers","avg_basket"])
 
 def save_cache(df):
-    # Ξεχωρίζουμε: τελευταία 2 χρόνια στο cache, παλαιότερα στο archive
     cutoff = date.today() - timedelta(days=365*DEEP_SCAN_YEARS)
     recent = df[df["date"] >= cutoff].copy()
     old    = df[df["date"]  < cutoff].copy()
@@ -82,7 +81,6 @@ def save_cache(df):
         old.to_csv(SALES_ARCHIVE, index=False)
 
 def load_all():
-    """Φόρτωση cache + archive σε ένα DataFrame"""
     parts = []
     if os.path.exists(SALES_CACHE):
         df = pd.read_csv(SALES_CACHE)
@@ -99,43 +97,22 @@ def load_all():
     return pd.DataFrame(columns=["date","net_sales","customers","avg_basket"])
 
 def parse_greek_number(s):
-    """
-    Μετατρέπει ελληνικό/ευρωπαϊκό format αριθμού σε float.
-    π.χ. "9.176,63" → 9176.63  |  "9176.63" → 9176.63
-    """
     s = s.strip().replace(" ", "").replace("€", "")
-    # Αν έχει κόμμα ΚΑΙ τελεία: ευρωπαϊκό format (. = χιλιάδες, , = δεκαδικά)
     if "." in s and "," in s:
         s = s.replace(".", "").replace(",", ".")
     elif "," in s and "." not in s:
-        # Μόνο κόμμα → δεκαδικό διαχωριστικό
         s = s.replace(",", ".")
-    # Αλλιώς το αφήνουμε ως έχει (plain float)
     return float(s)
 
 def extract_sales_from_pdf(pdf_bytes):
-    """
-    Εξάγει: date, net_sales, customers, avg_basket
-    από ένα PDF που περιέχει Department Report + Hourly Productivity.
-
-    Πεδία που ψάχνουμε (από τα πραγματικά PDFs):
-      Ημερομηνία  : "For  DD/MM/YYYY"
-      Τζίρος      : "NeitDaySalDis  9.176,63"  (ή NeitDaySalDis / NetDaySalDis)
-      Πελάτες     : "NumItmSold  282"
-      ΜΟ Καλαθιού : "AvgItmPerCus  32,54"
-
-    Fallback για τζίρο: Hourly Productivity → "Totals: 9176.63  100.00  282"
-    """
     result = {"date": None, "net_sales": None, "customers": None, "avg_basket": None}
     try:
-        # Μετατροπή PDF → εικόνες → OCR text
         images    = convert_from_bytes(pdf_bytes, dpi=220)
         full_text = ""
         for img in images:
             full_text += pytesseract.image_to_string(img, lang="ell+eng") + "\n"
 
-        # ─── ΗΜΕΡΟΜΗΝΙΑ ───────────────────────────────────────────────────────
-        # "For  25/04/2026" ή "For: 25/04/2026"
+        # DATE
         date_patterns = [
             r'[Ff]or\s*[:\-]?\s*(\d{1,2}/\d{1,2}/\d{4})',
             r'[Ff]or\s*[:\-]?\s*(\d{1,2}\.\d{1,2}\.\d{4})',
@@ -150,16 +127,13 @@ def extract_sales_from_pdf(pdf_bytes):
                 except:
                     pass
 
-        # Fallback: πρώτη ημερομηνία DD/MM/YYYY στο κείμενο
         if result["date"] is None:
             m = re.search(r'(\d{2}/\d{2}/\d{4})', full_text)
             if m:
                 try: result["date"] = datetime.strptime(m.group(1), "%d/%m/%Y").date()
                 except: pass
 
-        # ─── ΚΑΘΑΡΕΣ ΠΩΛΗΣΕΙΣ (NeitDaySalDis) ───────────────────────────────
-        # Το πεδίο εμφανίζεται στο header του Department Report ως:
-        # "NeitDaySalDis   9.176,63"   ή  "NetDaySalDis   9,176.63"
+        # NET SALES
         net_patterns = [
             r'[Nn]e[it]{1,3}[Dd]ay[Ss]al[Dd]is\s+([\d.,]+)',
             r'[Nn]et[Dd]ay[Ss]al[Dd]is\s+([\d.,]+)',
@@ -174,52 +148,36 @@ def extract_sales_from_pdf(pdf_bytes):
                 except:
                     pass
 
-        # Fallback: Hourly Productivity "Totals:" line
-        # Format: "Totals:   9176.63   100.00   282   2.00   4588.32 ..."
         if result["net_sales"] is None:
-            m = re.search(
-                r'[Tt]otals?\s*[:\-]?\s*([\d.,]+)\s+100[.,]00\s+([\d]+)',
-                full_text
-            )
+            m = re.search(r'[Tt]otals?\s*[:\-]?\s*([\d.,]+)\s+100[.,]00\s+([\d]+)', full_text)
             if m:
                 try:
                     result["net_sales"] = parse_greek_number(m.group(1))
-                    # Πελάτες από την ίδια γραμμή
                     if result["customers"] is None:
                         result["customers"] = int(m.group(2))
                 except:
                     pass
 
-        # Fallback 2: RepTot / GroupTot (τελευταία γραμμή Department Report)
         if result["net_sales"] is None:
             m = re.search(r'[Gg]roup[Tt]ot\s+([\d.,]+)\s+([\d.,]+)', full_text)
             if m:
-                try:
-                    result["net_sales"] = parse_greek_number(m.group(2))
-                except:
-                    pass
+                try: result["net_sales"] = parse_greek_number(m.group(2))
+                except: pass
 
-        # ─── ΠΕΛΑΤΕΣ (NumItmSold) ────────────────────────────────────────────
-        # "NumItmSold   282"
+        # CUSTOMERS
         if result["customers"] is None:
             m = re.search(r'[Nn]um[Ii]tm[Ss]old\s+([\d,. ]+)', full_text)
             if m:
-                try:
-                    result["customers"] = int(m.group(1).replace(",","").replace(".","").strip())
-                except:
-                    pass
+                try: result["customers"] = int(m.group(1).replace(",","").replace(".","").strip())
+                except: pass
 
-        # Fallback: AvgSalCus × NumOfCus  ≈  πελάτες
         if result["customers"] is None:
             m = re.search(r'[Nn]um[Oo]f[Cc]us\s+([\d,. ]+)', full_text)
             if m:
-                try:
-                    result["customers"] = int(m.group(1).replace(",","").replace(".","").strip())
-                except:
-                    pass
+                try: result["customers"] = int(m.group(1).replace(",","").replace(".","").strip())
+                except: pass
 
-        # ─── ΜΟ ΚΑΛΑΘΙΟΥ (AvgItmPerCus) ─────────────────────────────────────
-        # "AvgItmPerCus   32,54"  ή "AvgItmPric"
+        # AVG BASKET
         avg_patterns = [
             r'[Aa]vg[Ii]tm[Pp]er[Cc]us\s+([\d.,]+)',
             r'[Aa]vg[Ii]tm[Pp]ric\s+([\d.,]+)',
@@ -241,63 +199,69 @@ def extract_sales_from_pdf(pdf_bytes):
 
 def fetch_emails_incremental(password, full_scan=False):
     """
-    Smart fetch:
-    - full_scan=True: βαθιά σάρωση τελευταίων 2 ετών
-    - full_scan=False: μόνο από την τελευταία ημερομηνία που έχουμε
-    Επιστρέφει νέες εγγραφές (list of dicts).
+    Διαβάζει τα emails, ένα-ένα, χωρίς να τα φορτώνει όλα στη μνήμη.
     """
     df_existing = load_cache()
     cutoff_date = None
 
     if not full_scan and not df_existing.empty:
-        # Φέρνουμε μόνο emails μετά την τελευταία ημερομηνία
         last_date   = df_existing["date"].max()
-        cutoff_date = last_date - timedelta(days=3)  # 3 μέρες overlap για ασφάλεια
+        cutoff_date = last_date - timedelta(days=3)
 
     cutoff_year = date.today().year - DEEP_SCAN_YEARS if full_scan else None
 
     new_records = []
     errors = []
+    
+    # 20 emails για τη γρήγορη σάρωση, None για όλα στη βαθιά
+    limit = None if full_scan else 20
+    
+    print(f"\n--- ΕΝΑΡΞΗ {'ΒΑΘΙΑΣ' if full_scan else 'ΓΡΗΓΟΡΗΣ'} ΣΑΡΩΣΗΣ ---")
 
     try:
-        with MailBox("imap.gmail.com").login(SALES_EMAIL_USER, password) as mb:
-            # Φτιάχνουμε criteria
+        # TIMEOUT στα 15 δευτερόλεπτα για να μην κολλάει η εφαρμογή αν αργεί το δίκτυο
+        with MailBox("imap.gmail.com").login(SALES_EMAIL_USER, password, timeout=15) as mb:
+            print("✅ Σύνδεση στο Gmail επιτυχής.")
+            
             criteria = AND(from_=SALES_EMAIL_SENDER)
-            messages = list(mb.fetch(criteria, reverse=True))
-
-            for msg in messages:
+            
+            # Αντί για list(), διαβάζουμε απ' ευθείας από τον server (γλιτώνουμε RAM)
+            for i, msg in enumerate(mb.fetch(criteria, reverse=True, limit=limit)):
                 msg_date = msg.date.date() if msg.date else None
+                print(f"[{i+1}] Ελέγχεται email από: {msg_date}")
 
-                # Skip αν είναι πολύ παλιό
                 if full_scan and cutoff_year and msg_date and msg_date.year < cutoff_year:
                     continue
 
-                # Skip αν είναι ήδη στο cache (incremental mode)
                 if not full_scan and cutoff_date and msg_date and msg_date < cutoff_date:
+                    print("  ↳ Υπάρχει ήδη στο σύστημα. Προσπέραση.")
                     continue
 
-                # Skip αν δεν έχει "ΑΒ ΣΚΥΡΟΣ" στο subject
                 subj = msg.subject or ""
                 if SALES_SUBJECT_KW.lower() not in subj.lower() and "skyros" not in subj.lower():
                     continue
 
-                # Κάθε email έχει ακριβώς 1 PDF
-                pdf_att = next(
-                    (a for a in msg.attachments
-                     if a.filename and a.filename.lower().endswith(".pdf")),
-                    None
-                )
+                pdf_att = next((a for a in msg.attachments if a.filename and a.filename.lower().endswith(".pdf")), None)
+                
                 if pdf_att:
+                    print(f"  ↳ Διαβάζεται το PDF: {pdf_att.filename}...")
                     rec = extract_sales_from_pdf(pdf_att.payload)
+                    
                     if rec["date"] and rec["net_sales"] is not None:
                         if not df_existing.empty and rec["date"] in df_existing["date"].values:
+                            print(f"  ↳ Τα δεδομένα της {rec['date']} υπάρχουν ήδη.")
                             continue
                         new_records.append(rec)
+                        print(f"  ↳ ✅ ΕΠΙΤΥΧΙΑ: {rec['date']} -> {rec['net_sales']}€")
+
+            print(f"--- ΟΛΟΚΛΗΡΩΣΗ: Προστέθηκαν {len(new_records)} νέες εγγραφές ---")
 
     except Exception as e:
+        print(f"❌ ΣΦΑΛΜΑ GMAIL: {e}")
         errors.append(str(e))
 
     return new_records, errors
+
 
 # ── CACHE LOAD ────────────────────────────────────────────────────────────────
 df = load_all()
@@ -305,15 +269,12 @@ today = date.today()
 
 # ── RENDER ────────────────────────────────────────────────────────────────────
 
-
-# Topbar
 st.markdown("""
 <div class="topbar">
   <div class="ptitle">📊 Πωλήσεις Καταστήματος</div>
 </div>
 """, unsafe_allow_html=True)
 
-# Back button
 col_back, _ = st.columns([1, 4])
 with col_back:
     st.markdown('<div class="btn-back">', unsafe_allow_html=True)
@@ -329,7 +290,6 @@ with tab_dash:
     if df.empty:
         st.markdown('<div class="warn-box">⚠️ Δεν υπάρχουν δεδομένα. Μεταβείτε στην καρτέλα <b>Ενημέρωση</b> για φόρτωση από email.</div>', unsafe_allow_html=True)
     else:
-        # KPIs last day
         last = df.iloc[0]
         prev = df.iloc[1] if len(df) > 1 else None
 
@@ -370,14 +330,12 @@ with tab_dash:
           </div>
         </div>""", unsafe_allow_html=True)
 
-        # Monthly
         st.markdown('<div class="sh">Τρέχων Μήνας</div>', unsafe_allow_html=True)
         m_df  = df[(df["date"] >= date(today.year, today.month, 1)) & (df["date"] <= today)]
         m_tot = m_df["net_sales"].sum() if not m_df.empty else 0
         m_avg = m_df["net_sales"].mean() if not m_df.empty else 0
         m_days = len(m_df)
 
-        # Previous month
         first_this = date(today.year, today.month, 1)
         last_prev  = first_this - timedelta(days=1)
         pm_df  = df[(df["date"] >= date(last_prev.year, last_prev.month, 1)) & (df["date"] <= last_prev)]
@@ -400,7 +358,6 @@ with tab_dash:
           </div>
         </div>""", unsafe_allow_html=True)
 
-        # Chart (last 14 days)
         st.markdown('<div class="sh">Τελευταίες 14 ημέρες</div>', unsafe_allow_html=True)
         chart_df = df[df["date"] >= (today - timedelta(days=13))].sort_values("date").copy()
         if not chart_df.empty:
@@ -412,7 +369,6 @@ with tab_history:
     if df.empty:
         st.markdown('<div class="warn-box">Δεν υπάρχουν δεδομένα.</div>', unsafe_allow_html=True)
     else:
-        # Filters
         c1, c2 = st.columns(2)
         with c1:
             years = sorted(set(r.year for r in df["date"]), reverse=True)
@@ -465,8 +421,7 @@ with tab_update:
             run_full = True
 
     if (run_inc or run_full) and password:
-        mode = "full" if run_full else "incremental"
-        lbl  = "Βαθιά σάρωση 2 ετών..." if run_full else "Φόρτωση νέων emails..."
+        lbl = "Βαθιά σάρωση 2 ετών..." if run_full else "Φόρτωση νέων emails (max 20)..."
 
         with st.spinner(lbl):
             new_recs, errs = fetch_emails_incremental(password, full_scan=run_full)
@@ -502,5 +457,3 @@ with tab_update:
             save_cache(merged)
             st.success(f"✅ Αποθηκεύτηκε: {entry_date.strftime('%d/%m/%Y')} — {fmt(net_s)}")
             st.rerun()
-
-
