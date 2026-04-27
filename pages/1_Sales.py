@@ -400,13 +400,31 @@ ws    = today - timedelta(days=today.weekday())
 we    = ws + timedelta(days=6)
 wlbl  = f"{ws.strftime('%d/%m')}–{we.strftime('%d/%m')}"
 
+# Auto-update: runs ONCE per session, silently, only if PW exists
 if "auto_done" not in st.session_state:
     st.session_state.auto_done   = False
     st.session_state.auto_result = ""
-if not st.session_state.auto_done and _PW:
-    with st.spinner("..."):
-        st.session_state.auto_result = auto_update(_PW)
-        st.session_state.auto_done   = True
+    st.session_state.auto_ran    = False
+
+# Run auto-update after first render (not during initial load)
+if not st.session_state.auto_ran and _PW:
+    st.session_state.auto_ran = True
+    ld_check = last_dt()
+    # Only auto-update if data is stale (not today)
+    if ld_check is None or ld_check < date.today():
+        try:
+            since = (ld_check - timedelta(days=3)) if ld_check else (date.today()-timedelta(days=7))
+            recs, errs, n = fetch(_PW, since=since, limit=30)
+            if not errs:
+                saved = merge_in(recs)
+                st.session_state.auto_result = f"ok:{saved}"
+            else:
+                st.session_state.auto_result = f"err:{errs[0]}"
+        except Exception as e:
+            st.session_state.auto_result = f"err:{e}"
+    else:
+        st.session_state.auto_result = "fresh"
+    st.session_state.auto_done = True
 
 # Keep deep scan state alive across reruns
 if "deep_running" not in st.session_state:
