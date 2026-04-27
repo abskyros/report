@@ -247,7 +247,7 @@ def extract_from_pdf(pdf_bytes: bytes) -> dict:
     """
     Εξάγει: date, net_sales, customers, avg_basket
     από Department Report PDF (AB Σκύρος).
-    Πεδία: NeitDaySalDis, NumItmSold, AvgItmPerCus
+    Πεδία: NeitDaySalDis (πωλήσεις), NumOfCus (πελάτες), AvgSalCus (ΜΟ καλαθιού)
     """
     result = {"date": None, "net_sales": None, "customers": None, "avg_basket": None}
     try:
@@ -288,7 +288,11 @@ def extract_from_pdf(pdf_bytes: bytes) -> dict:
                 try:
                     result["net_sales"] = parse_num(m.group(1))
                     if result["customers"] is None:
-                        result["customers"] = int(m.group(2))
+                        try:
+                            cval = int(m.group(2))
+                            if 10 <= cval <= 2000:  # sanity check
+                                result["customers"] = cval
+                        except: pass
                 except: pass
 
         # Fallback: GroupTot
@@ -298,21 +302,57 @@ def extract_from_pdf(pdf_bytes: bytes) -> dict:
                 try: result["net_sales"] = parse_num(m.group(2))
                 except: pass
 
-        # ── Πελάτες: NumItmSold ───────────────────────────────────────────────
-        if result["customers"] is None:
-            m = re.search(r'[Nn]um[Ii]tm[Ss]old\s+([\d,.]+)', full_text)
-            if m:
-                try: result["customers"] = int(m.group(1).replace(",","").replace(".",""))
-                except: pass
-
-        # ── ΜΟ Καλαθιού: AvgItmPerCus ────────────────────────────────────────
+        # ── Πελάτες: NumOfCus (αριθμός πελατών) ─────────────────────────────────
+        # ΠΡΟΣΟΧΗ: NumOfCus = πελάτες, NumItmSold = αντικείμενα (διαφορετικό!)
         for pat in [
-            r'[Aa]vg[Ii]tm[Pp]er[Cc]us\s+([\d.,]+)',
-            r'[Aa]vg[Ii]tm[Pp]ric\s+([\d.,]+)',
+            r'[Nn]um[Oo]f[Cc]us\s+([\d,.]+)',
+            r'NumOfCus\s+([\d,.]+)',
         ]:
             m = re.search(pat, full_text)
             if m:
-                try: result["avg_basket"] = parse_num(m.group(1)); break
+                try:
+                    val = int(m.group(1).replace(",","").replace(".","").strip())
+                    # Sanity check: πελάτες συνήθως 50-800 την ημέρα
+                    if 10 <= val <= 2000:
+                        result["customers"] = val
+                        break
+                except: pass
+
+        # Fallback: NumItmSold (αν δεν βρεθεί NumOfCus)
+        if result["customers"] is None:
+            m = re.search(r'[Nn]um[Ii]tm[Ss]old\s+([\d,.]+)', full_text)
+            if m:
+                try:
+                    val = int(m.group(1).replace(",","").replace(".","").strip())
+                    if 10 <= val <= 2000:
+                        result["customers"] = val
+                except: pass
+
+        # ── ΜΟ Καλαθιού: AvgSalCus (μέσο καλάθι ανά πελάτη σε €) ───────────
+        # ΠΡΟΣΟΧΗ: AvgSalCus = ΜΟ € ανά πελάτη ✓
+        #          AvgItmPerCus = ΜΟ αντικείμενα ανά πελάτη ✗
+        for pat in [
+            r'[Aa]vg[Ss]al[Cc]us\s+([\d.,]+)',
+            r'AvgSalCus\s+([\d.,]+)',
+        ]:
+            m = re.search(pat, full_text)
+            if m:
+                try:
+                    val = parse_num(m.group(1))
+                    # Sanity check: ΜΟ καλαθιού συνήθως 10-200€
+                    if 5.0 <= val <= 500.0:
+                        result["avg_basket"] = val
+                        break
+                except: pass
+
+        # Fallback: AvgItmPric (τιμή ανά αντικείμενο)
+        if result["avg_basket"] is None:
+            m = re.search(r'[Aa]vg[Ii]tm[Pp]ric\s+([\d.,]+)', full_text)
+            if m:
+                try:
+                    val = parse_num(m.group(1))
+                    if 5.0 <= val <= 500.0:
+                        result["avg_basket"] = val
                 except: pass
 
     except Exception as e:
