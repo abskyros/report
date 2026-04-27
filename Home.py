@@ -14,18 +14,19 @@ st.markdown("""
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap');
 
 :root {
-  --bg:      #0f1117;
-  --surface: #181c24;
-  --border:  #2a2f3d;
-  --muted:   #4a5268;
-  --dim:     #8892a4;
-  --text:    #e8eaf0;
-  --green:   #22c55e;
-  --blue:    #3b82f6;
-  --amber:   #f59e0b;
-  --red:     #ef4444;
-  --mono:    'IBM Plex Mono', monospace;
-  --sans:    'IBM Plex Sans', sans-serif;
+  --bg:       #1e2128;
+  --surface:  #272b34;
+  --surface2: #2e333d;
+  --border:   #383d4a;
+  --muted:    #5a6070;
+  --dim:      #8a909e;
+  --text:     #d4d8e0;
+  --text-hi:  #eceef2;
+  --green:    #4ade80;
+  --blue:     #60a5fa;
+  --amber:    #fbbf24;
+  --mono:     'IBM Plex Mono', monospace;
+  --sans:     'IBM Plex Sans', sans-serif;
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -33,107 +34,121 @@ html, body, [class*="css"] {
   font-family: var(--sans) !important;
   background: var(--bg) !important;
   color: var(--text) !important;
-  font-size: 14px !important;
 }
 .stApp { background: var(--bg) !important; }
 section[data-testid="stSidebar"] { display: none !important; }
 #MainMenu, footer, header { visibility: hidden !important; }
 
-/* Tight single-screen layout */
+/* ─── LAYOUT WRAPPER ─── */
 .block-container {
-  padding: 1.2rem 1rem 1rem !important;
-  max-width: 420px !important;
-  margin: 0 auto !important;
+  padding: 0 !important;
+  max-width: 100% !important;
+}
+.hub {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 1.6rem 1.5rem 2rem;
 }
 
-/* ── TOP BAR ── */
+/* ─── TOPBAR ─── */
 .topbar {
   display: flex;
   justify-content: space-between;
   align-items: flex-end;
-  padding-bottom: .75rem;
+  padding-bottom: .9rem;
   border-bottom: 1px solid var(--border);
-  margin-bottom: .9rem;
+  margin-bottom: 1.2rem;
 }
-.tb-store {
+.tb-left {}
+.tb-eyebrow {
   font-family: var(--mono);
-  font-size: .65rem;
+  font-size: .58rem;
   font-weight: 600;
-  letter-spacing: .12em;
-  color: var(--muted);
+  letter-spacing: .16em;
   text-transform: uppercase;
-  margin-bottom: .2rem;
+  color: var(--muted);
+  margin-bottom: .25rem;
 }
 .tb-title {
   font-family: var(--mono);
-  font-size: 1.1rem;
+  font-size: 1.25rem;
   font-weight: 600;
-  color: var(--text);
+  color: var(--text-hi);
   letter-spacing: -.01em;
 }
-.tb-date {
+.tb-right {
   text-align: right;
   font-family: var(--mono);
   font-size: .6rem;
-  color: var(--muted);
-  line-height: 1.7;
+  color: var(--dim);
+  line-height: 1.8;
 }
 
-/* ── WEEK ROW ── */
-.week-row {
+/* ─── WEEK STRIP ─── */
+.week-strip {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-columns: repeat(4, 1fr);
   gap: 1px;
   background: var(--border);
   border: 1px solid var(--border);
   border-radius: 6px;
   overflow: hidden;
-  margin-bottom: .8rem;
+  margin-bottom: 1.2rem;
 }
-.wr-cell {
+.ws-cell {
   background: var(--surface);
-  padding: .65rem .8rem;
+  padding: .75rem 1rem;
 }
-.wr-lbl {
+.ws-label {
   font-size: .52rem;
   font-weight: 600;
   letter-spacing: .14em;
   text-transform: uppercase;
   color: var(--muted);
-  margin-bottom: .25rem;
+  margin-bottom: .3rem;
 }
-.wr-val {
+.ws-val {
   font-family: var(--mono);
-  font-size: .85rem;
+  font-size: .88rem;
   font-weight: 500;
   color: var(--text);
 }
-.wr-val.g { color: var(--green); }
-.wr-val.b { color: var(--blue); }
+.ws-val.g { color: var(--green); }
+.ws-val.b { color: var(--blue); }
+.ws-val.d { color: var(--dim); font-size: .75rem; }
 
-/* ── MODULE CARD ── */
+/* ─── MODULE GRID ─── */
+.mod-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: 1fr 1fr;   /* desktop: 2 columns */
+  margin-bottom: 1.1rem;
+}
+
+/* ─── MODULE CARD ─── */
 .mcard {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 6px;
-  margin-bottom: .75rem;
   overflow: hidden;
 }
-.mc-hdr {
+.mc-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: .6rem .9rem;
+  padding: .65rem 1rem;
   border-bottom: 1px solid var(--border);
+  background: var(--surface2);
 }
-.mc-name {
+.mc-title {
   font-family: var(--mono);
   font-size: .72rem;
   font-weight: 600;
-  letter-spacing: .04em;
-  color: var(--text);
+  letter-spacing: .05em;
+  color: var(--text-hi);
 }
-.mc-tag {
+.mc-badge {
+  font-family: var(--mono);
   font-size: .52rem;
   font-weight: 600;
   letter-spacing: .12em;
@@ -141,17 +156,19 @@ section[data-testid="stSidebar"] { display: none !important; }
   padding: .15rem .5rem;
   border-radius: 3px;
 }
-.tag-live { background: rgba(34,197,94,.12); color: var(--green); }
-.tag-warn { background: rgba(245,158,11,.12); color: var(--amber); }
-.tag-idle { background: rgba(74,82,104,.2);   color: var(--muted); }
+.b-live { background: rgba(74,222,128,.12); color: var(--green); border: 1px solid rgba(74,222,128,.2); }
+.b-warn { background: rgba(251,191,36,.1);  color: var(--amber); border: 1px solid rgba(251,191,36,.2); }
+.b-idle { background: rgba(90,96,112,.15);  color: var(--muted); border: 1px solid var(--border); }
 
-.mc-body { padding: .65rem .9rem; }
+.mc-body { padding: .6rem 1rem .8rem; }
+
+/* Desktop rows */
 .mc-row {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
-  padding: .28rem 0;
-  border-bottom: 1px solid rgba(42,47,61,.6);
+  padding: .3rem 0;
+  border-bottom: 1px solid rgba(56,61,74,.5);
 }
 .mc-row:last-child { border-bottom: none; }
 .mc-key {
@@ -159,20 +176,23 @@ section[data-testid="stSidebar"] { display: none !important; }
   font-weight: 500;
   letter-spacing: .06em;
   text-transform: uppercase;
-  color: var(--muted);
+  color: var(--dim);
 }
 .mc-val {
   font-family: var(--mono);
-  font-size: .78rem;
+  font-size: .82rem;
   font-weight: 500;
   color: var(--text);
 }
-.mc-val.hero { font-size: .92rem; color: var(--green); }
-.mc-val.blue { font-size: .92rem; color: var(--blue); }
-.mc-val.dim  { color: var(--muted); font-style: italic; }
+.mc-val.hero { font-size: 1rem; color: var(--green); }
+.mc-val.blue { font-size: 1rem; color: var(--blue); }
+.mc-val.dim  { color: var(--muted); font-style: italic; font-size: .72rem; }
 
-/* ── NAV BUTTONS ── */
-.nav-row { display: grid; grid-template-columns: 1fr 1fr; gap: .6rem; }
+/* Mobile: hide secondary rows */
+.mc-row.secondary { display: flex; }
+
+/* ─── NAV BUTTONS ─── */
+.nav-row { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; }
 .stButton > button {
   width: 100% !important;
   border-radius: 5px !important;
@@ -180,36 +200,71 @@ section[data-testid="stSidebar"] { display: none !important; }
   font-size: .72rem !important;
   font-weight: 600 !important;
   letter-spacing: .06em !important;
-  padding: .6rem 1rem !important;
+  padding: .65rem 1rem !important;
   transition: all .12s !important;
+  text-transform: uppercase !important;
 }
 .btn-g > button {
-  background: rgba(34,197,94,.1) !important;
-  border: 1px solid rgba(34,197,94,.3) !important;
+  background: rgba(74,222,128,.1) !important;
+  border: 1px solid rgba(74,222,128,.25) !important;
   color: var(--green) !important;
 }
-.btn-g > button:hover { background: rgba(34,197,94,.2) !important; }
+.btn-g > button:hover { background: rgba(74,222,128,.18) !important; }
 .btn-b > button {
-  background: rgba(59,130,246,.1) !important;
-  border: 1px solid rgba(59,130,246,.3) !important;
+  background: rgba(96,165,250,.1) !important;
+  border: 1px solid rgba(96,165,250,.25) !important;
   color: var(--blue) !important;
 }
-.btn-b > button:hover { background: rgba(59,130,246,.2) !important; }
+.btn-b > button:hover { background: rgba(96,165,250,.18) !important; }
 
 .foot {
   font-family: var(--mono);
   font-size: .52rem;
   letter-spacing: .1em;
+  text-transform: uppercase;
   color: var(--muted);
   text-align: center;
-  padding-top: .6rem;
+  padding-top: .8rem;
   border-top: 1px solid var(--border);
-  margin-top: .6rem;
+  margin-top: .5rem;
 }
 
-@media(max-width: 380px) {
-  .block-container { padding: .8rem .75rem !important; }
-  .week-row { grid-template-columns: 1fr 1fr; }
+/* ═══════════════════════════════════
+   MOBILE  ≤ 640px
+   ─ single column
+   ─ week strip 2 cols
+   ─ hide secondary data rows
+   ─ smaller font
+═══════════════════════════════════ */
+@media (max-width: 640px) {
+  .hub { padding: 1rem .9rem 1.5rem; }
+
+  .tb-title { font-size: .95rem; }
+  .tb-right { display: none; }       /* hide date on mobile — saves space */
+
+  .week-strip { grid-template-columns: 1fr 1fr; }
+  .ws-cell:nth-child(3),
+  .ws-cell:nth-child(4) { display: none; }  /* hide last 2 cells on mobile */
+
+  .mod-grid { grid-template-columns: 1fr; gap: .7rem; }
+
+  .mc-row.secondary { display: none; }  /* hide secondary rows on mobile */
+
+  .mc-val.hero { font-size: .88rem; }
+  .mc-val.blue { font-size: .88rem; }
+
+  .nav-row { gap: .5rem; }
+  .stButton > button { padding: .55rem .8rem !important; font-size: .68rem !important; }
+}
+
+/* ═══════════════════════════════════
+   TABLET  641px – 900px
+   ─ 2-col grid
+   ─ week strip 3 cols
+═══════════════════════════════════ */
+@media (min-width: 641px) and (max-width: 900px) {
+  .week-strip { grid-template-columns: repeat(3, 1fr); }
+  .ws-cell:last-child { display: none; }
 }
 </style>
 """, unsafe_allow_html=True)
@@ -217,18 +272,19 @@ section[data-testid="stSidebar"] { display: none !important; }
 # ── DATA ─────────────────────────────────────────────────────────────────────
 SALES_CACHE = "sales_cache.csv"
 INV_CACHE   = "invoices_cache.csv"
-DAYS_GR  = ["ΔΕΥ","ΤΡΙ","ΤΕΤ","ΠΕΜ","ΠΑΡ","ΣΑΒ","ΚΥΡ"]
-MONTHS_GR = ["ΙΑΝ","ΦΕΒ","ΜΑΡ","ΑΠΡ","ΜΑΙ","ΙΟΥ","ΙΟΥ","ΑΥΓ","ΣΕΠ","ΟΚΤ","ΝΟΕ","ΔΕΚ"]
+DAYS_GR   = ["Δευτέρα","Τρίτη","Τετάρτη","Πέμπτη","Παρασκευή","Σάββατο","Κυριακή"]
+MONTHS_GR = ["Ιαν","Φεβ","Μαρ","Απρ","Μαι","Ιουν","Ιουλ","Αυγ","Σεπ","Οκτ","Νοε","Δεκ"]
 
 def fmt(v):
     if v is None or (isinstance(v, float) and pd.isna(v)): return "—"
-    return f"{v:,.2f}€".replace(",","X").replace(".",",").replace("X",".")
+    return f"{v:,.2f} €".replace(",","X").replace(".",",").replace("X",".")
 
 today    = date.today()
 week_mon = today - timedelta(days=today.weekday())
 week_sun = week_mon + timedelta(days=6)
-wlbl     = f"{week_mon.strftime('%d/%m')}–{week_sun.strftime('%d/%m')}"
+wlbl     = f"{week_mon.strftime('%d/%m')} – {week_sun.strftime('%d/%m')}"
 
+# Load sales
 df_s = pd.DataFrame()
 if os.path.exists(SALES_CACHE):
     try:
@@ -241,6 +297,7 @@ if os.path.exists(SALES_CACHE):
                      .reset_index(drop=True))
     except: pass
 
+# Load invoices
 df_i = pd.DataFrame()
 if os.path.exists(INV_CACHE):
     try:
@@ -251,23 +308,28 @@ if os.path.exists(INV_CACHE):
     except: pass
 
 # ── COMPUTE ───────────────────────────────────────────────────────────────────
-s_val = s_date = s_cust = s_days = None
-s_week = 0; s_wdays = 0
+s_val = s_date = s_cust = s_avg = s_days = None
+s_week = s_month = 0
+s_wdays = 0
+
 if not df_s.empty:
-    r       = df_s.iloc[0]
-    s_val   = r.get("net_sales")
-    s_date  = r.get("date")
-    s_cust  = int(r["customers"]) if pd.notna(r.get("customers")) else None
-    s_days  = (today - s_date).days if s_date else None
-    wm      = df_s[(df_s["date"] >= week_mon) & (df_s["date"] <= today)]
-    s_week  = wm["net_sales"].sum() if not wm.empty else 0
-    s_wdays = len(wm)
+    r        = df_s.iloc[0]
+    s_val    = r.get("net_sales")
+    s_date   = r.get("date")
+    s_cust   = int(r["customers"])   if pd.notna(r.get("customers"))   else None
+    s_avg    = r.get("avg_basket")   if pd.notna(r.get("avg_basket"))  else None
+    s_days   = (today - s_date).days if s_date else None
+    wm = df_s[(df_s["date"] >= week_mon) & (df_s["date"] <= today)]
+    s_week   = wm["net_sales"].sum() if not wm.empty else 0
+    s_wdays  = len(wm)
+    mm = df_s[(df_s["date"] >= date(today.year,today.month,1)) & (df_s["date"] <= today)]
+    s_month  = mm["net_sales"].sum() if not mm.empty else 0
 
 inv_week = inv_month = None
 if not df_i.empty:
     wdt = datetime.combine(week_mon, datetime.min.time())
     wet = datetime.combine(today,    datetime.max.time())
-    wi  = df_i[(df_i["DATE"]>=wdt)&(df_i["DATE"]<=wet)]
+    wi  = df_i[(df_i["DATE"] >= wdt) & (df_i["DATE"] <= wet)]
     if not wi.empty:
         inv_week = (wi[~wi["TYPE"].str.contains("ΠΙΣΤΩΤΙΚΟ",na=False)]["VALUE"].sum()
                   - wi[ wi["TYPE"].str.contains("ΠΙΣΤΩΤΙΚΟ",na=False)]["VALUE"].sum())
@@ -276,84 +338,138 @@ if not df_i.empty:
         inv_month = (mi[~mi["TYPE"].str.contains("ΠΙΣΤΩΤΙΚΟ",na=False)]["VALUE"].sum()
                    - mi[ mi["TYPE"].str.contains("ΠΙΣΤΩΤΙΚΟ",na=False)]["VALUE"].sum())
 
-# ── RENDER ────────────────────────────────────────────────────────────────────
-dy  = DAYS_GR[today.weekday()]
-mon = MONTHS_GR[today.month-1]
+# ── BUILD PAGE ────────────────────────────────────────────────────────────────
+day_gr  = DAYS_GR[today.weekday()]
+mon_gr  = MONTHS_GR[today.month-1]
+date_str = f"{day_gr}, {today.day} {mon_gr} {today.year}"
 
+# Status badges
+if s_days == 0:     s_badge, s_bcls = "LIVE", "b-live"
+elif s_days and s_days <= 2: s_badge, s_bcls = f"–{s_days}D", "b-warn"
+elif s_date:        s_badge, s_bcls = f"–{s_days}D", "b-idle"
+else:               s_badge, s_bcls = "N/A",  "b-idle"
+
+i_badge = "OK"  if (inv_week is not None) else "N/A"
+i_bcls  = "b-live" if (inv_week is not None) else "b-idle"
+
+# Helpers
+def _val(v, cls=""):   return f'<span class="mc-val {cls}">{v}</span>'
+def _row(k, v, cls="", secondary=False):
+    sec = " secondary" if secondary else ""
+    return f'<div class="mc-row{sec}"><span class="mc-key">{k}</span>{_val(v,cls)}</div>'
+def _empty():
+    return '<div class="mc-row"><span class="mc-val dim">Χωρίς δεδομένα</span></div>'
+
+st.markdown('<div class="hub">', unsafe_allow_html=True)
+
+# Topbar
 st.markdown(f"""
 <div class="topbar">
-  <div>
-    <div class="tb-store">AB Skyros · 1082</div>
+  <div class="tb-left">
+    <div class="tb-eyebrow">AB Skyros · Κατάστημα 1082</div>
     <div class="tb-title">Operations Hub</div>
   </div>
-  <div class="tb-date">{dy} {today.day} {mon}<br>{today.year}</div>
+  <div class="tb-right">{date_str}<br>Εβδομάδα {wlbl}</div>
 </div>
 """, unsafe_allow_html=True)
 
-# Week row
-sw_c = "g" if s_week else ""
-iw_c = "b" if inv_week is not None else ""
+# Week strip — 4 cells (some hidden on mobile/tablet via CSS)
+sw_cls = "g" if s_week else "d"
+iw_cls = "b" if inv_week is not None else "d"
+
 st.markdown(f"""
-<div class="week-row">
-  <div class="wr-cell">
-    <div class="wr-lbl">Εβδ. Πωλήσεις</div>
-    <div class="wr-val {sw_c}">{fmt(s_week) if s_week else "—"}</div>
+<div class="week-strip">
+  <div class="ws-cell">
+    <div class="ws-label">Πωλήσεις Εβδ.</div>
+    <div class="ws-val {sw_cls}">{fmt(s_week) if s_week else "—"}</div>
   </div>
-  <div class="wr-cell">
-    <div class="wr-lbl">Καθ. Τιμολ.</div>
-    <div class="wr-val {iw_c}">{fmt(inv_week) if inv_week is not None else "—"}</div>
+  <div class="ws-cell">
+    <div class="ws-label">Καθ. Τιμολ. Εβδ.</div>
+    <div class="ws-val {iw_cls}">{fmt(inv_week) if inv_week is not None else "—"}</div>
   </div>
-  <div class="wr-cell">
-    <div class="wr-lbl">Ημ. {wlbl}</div>
-    <div class="wr-val">{s_wdays}/7</div>
+  <div class="ws-cell">
+    <div class="ws-label">Πωλήσεις Μήνα</div>
+    <div class="ws-val">{fmt(s_month) if s_month else "—"}</div>
+  </div>
+  <div class="ws-cell">
+    <div class="ws-label">Ημέρες {wlbl}</div>
+    <div class="ws-val">{s_wdays} / 7</div>
   </div>
 </div>
 """, unsafe_allow_html=True)
 
-# Sales card
-if s_days == 0: s_tag, s_tc = "LIVE", "tag-live"
-elif s_days and s_days <= 2: s_tag, s_tc = f"–{s_days}D", "tag-warn"
-elif s_date: s_tag, s_tc = f"–{s_days}D", "tag-idle"
-else: s_tag, s_tc = "N/A", "tag-idle"
+# Module cards
+st.markdown('<div class="mod-grid">', unsafe_allow_html=True)
 
-st.markdown(f'<div class="mcard"><div class="mc-hdr"><span class="mc-name">ΠΩΛΗΣΕΙΣ</span><span class="mc-tag {s_tc}">{s_tag}</span></div><div class="mc-body">', unsafe_allow_html=True)
-if s_val:
+# ── SALES CARD ───────────────────────────────────────────────────────────────
+st.markdown(f"""
+<div class="mcard">
+  <div class="mc-header">
+    <span class="mc-title">ΠΩΛΗΣΕΙΣ ΚΑΤΑΣΤΗΜΑΤΟΣ</span>
+    <span class="mc-badge {s_bcls}">{s_badge}</span>
+  </div>
+  <div class="mc-body">
+""", unsafe_allow_html=True)
+
+if s_val is not None:
     dl = s_date.strftime("%d/%m/%Y")
-    st.markdown(f"""
-    <div class="mc-row"><span class="mc-key">Τελευταία · {dl}</span><span class="mc-val hero">{fmt(s_val)}</span></div>
-    <div class="mc-row"><span class="mc-key">Πελάτες</span><span class="mc-val">{s_cust if s_cust else '—'}</span></div>
-    <div class="mc-row"><span class="mc-key">Εβδομάδα {wlbl}</span><span class="mc-val hero">{fmt(s_week) if s_week else '—'}</span></div>
-    """, unsafe_allow_html=True)
+    st.markdown(
+        _row(f"Τελευταία · {dl}", fmt(s_val), "hero") +
+        _row("Πελάτες", str(s_cust) if s_cust else "—") +
+        _row(f"Εβδομάδα {wlbl}", fmt(s_week) if s_week else "—", "g", secondary=True) +
+        _row(f"Μήνας {mon_gr}", fmt(s_month) if s_month else "—", "", secondary=True) +
+        _row("ΜΟ Καλαθιού", fmt(s_avg) if s_avg else "—", "", secondary=True),
+        unsafe_allow_html=True
+    )
 else:
-    st.markdown('<div class="mc-row"><span class="mc-val dim">Χωρίς δεδομένα</span></div>', unsafe_allow_html=True)
+    st.markdown(_empty(), unsafe_allow_html=True)
+
 st.markdown('</div></div>', unsafe_allow_html=True)
 
-# Invoices card
-i_tag, i_tc = ("OK","tag-live") if (inv_week is not None or inv_month is not None) else ("N/A","tag-idle")
-st.markdown(f'<div class="mcard"><div class="mc-hdr"><span class="mc-name">ΤΙΜΟΛΟΓΙΑ</span><span class="mc-tag {i_tc}">{i_tag}</span></div><div class="mc-body">', unsafe_allow_html=True)
+# ── INVOICES CARD ─────────────────────────────────────────────────────────────
+st.markdown(f"""
+<div class="mcard">
+  <div class="mc-header">
+    <span class="mc-title">ΕΛΕΓΧΟΣ ΤΙΜΟΛΟΓΙΩΝ</span>
+    <span class="mc-badge {i_bcls}">{i_badge}</span>
+  </div>
+  <div class="mc-body">
+""", unsafe_allow_html=True)
+
 if inv_week is not None or inv_month is not None:
-    mn_lbl = MONTHS_GR[today.month-1]
+    mn_full = MONTHS_GR[today.month-1]
+    rows_html = ""
     if inv_week is not None:
-        st.markdown(f'<div class="mc-row"><span class="mc-key">Εβδομάδα {wlbl}</span><span class="mc-val blue">{fmt(inv_week)}</span></div>', unsafe_allow_html=True)
+        rows_html += _row(f"Καθαρό εβδ. {wlbl}", fmt(inv_week), "blue")
     if inv_month is not None:
-        st.markdown(f'<div class="mc-row"><span class="mc-key">Μήνας {mn_lbl}</span><span class="mc-val">{fmt(inv_month)}</span></div>', unsafe_allow_html=True)
+        rows_html += _row(f"Καθαρό μήνα {mn_full}", fmt(inv_month), "", secondary=True)
+    # last updated
+    if not df_i.empty:
+        last_inv = df_i["DATE"].max().strftime("%d/%m/%Y")
+        rows_html += _row("Τελευταία εγγραφή", last_inv, "", secondary=True)
+        cnt = len(df_i)
+        rows_html += _row("Σύνολο εγγραφών", str(cnt), "", secondary=True)
+    st.markdown(rows_html, unsafe_allow_html=True)
 else:
-    st.markdown('<div class="mc-row"><span class="mc-val dim">Χωρίς δεδομένα</span></div>', unsafe_allow_html=True)
-st.markdown('</div></div>', unsafe_allow_html=True)
+    st.markdown(_empty(), unsafe_allow_html=True)
 
-# Nav
+st.markdown('</div></div>', unsafe_allow_html=True)
+st.markdown('</div>', unsafe_allow_html=True)  # close mod-grid
+
+# ── NAVIGATION ────────────────────────────────────────────────────────────────
 st.markdown('<div class="nav-row">', unsafe_allow_html=True)
 c1, c2 = st.columns(2)
 with c1:
     st.markdown('<div class="btn-g">', unsafe_allow_html=True)
-    if st.button("ΠΩΛΗΣΕΙΣ", use_container_width=True):
+    if st.button("Πωλήσεις", use_container_width=True, key="gs"):
         st.switch_page("pages/1_Sales.py")
     st.markdown("</div>", unsafe_allow_html=True)
 with c2:
     st.markdown('<div class="btn-b">', unsafe_allow_html=True)
-    if st.button("ΤΙΜΟΛΟΓΙΑ", use_container_width=True):
+    if st.button("Τιμολόγια", use_container_width=True, key="gi"):
         st.switch_page("pages/2_Invoices.py")
     st.markdown("</div>", unsafe_allow_html=True)
 st.markdown('</div>', unsafe_allow_html=True)
 
-st.markdown(f'<div class="foot">AB SKYROS 1082 · OPERATIONS PLATFORM · {today.strftime("%Y")}</div>', unsafe_allow_html=True)
+st.markdown(f'<div class="foot">AB Skyros 1082 · Operations Platform · {today.year}</div>', unsafe_allow_html=True)
+st.markdown('</div>', unsafe_allow_html=True)  # close hub
