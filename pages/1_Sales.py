@@ -73,11 +73,6 @@ def fmt(v):
     return f"{v:,.2f}€".replace(",","X").replace(".",",").replace("X",".")
 
 def _dedup(df):
-    """
-    Η ΚΑΡΔΙΑ ΤΟΥ ΦΙΛΤΡΟΥ: 
-    Ταξινομεί ανά έσοδα, κρατάει ΜΟΝΟ την πρώτη εγγραφή για κάθε ημερομηνία 
-    και πετάει τις διπλότυπες! Έτσι αν έρθουν 4 email για την ίδια μέρα, πιάνει μόνο 1.
-    """
     if df.empty: return df
     return (df.sort_values("net_sales",ascending=False)
               .drop_duplicates("date",keep="first")
@@ -395,7 +390,6 @@ with tab_update:
         st.markdown('<div class="warn-box">⚠️ Δεν βρέθηκε <b>SALES_EMAIL_PASS</b> στα Secrets.</div>', unsafe_allow_html=True)
         sales_pw = st.text_input("🔐 Gmail App Password", type="password", key="sales_pw")
 
-    # Χωρίσαμε τον χώρο σε 3 στήλες τώρα!
     col_test, col_inc, col_full = st.columns(3)
     run_test = col_test.button("🧪 Δοκιμή (10 Τελευταία)", use_container_width=True)
     run_inc  = col_inc.button("⚡ Γρήγορη (Νέα μόνο)", use_container_width=True)
@@ -403,18 +397,41 @@ with tab_update:
 
     if run_test and sales_pw:
         with st.spinner("Ανάγνωση των 10 τελευταίων email & OCR..."):
-            # Βάζουμε since=None για να αγνοήσει ημερομηνίες και να φέρει 10 απολύτως τελευταία
             recs, errs, n_checked = fetch(sales_pw, since=None, limit=10)
             
         if errs:
             st.error(f"❌ Σφάλμα: {errs[0]}")
         else:
-            saved = merge_in(recs)
-            if saved > 0:
-                st.success(f"✅ Η Δοκιμή πέτυχε! Διαβάστηκαν {n_checked} emails και αποθηκεύτηκαν {saved} καθαρές εγγραφές (αγνοήθηκαν τα διπλότυπα).")
-                st.rerun()
+            if recs:
+                st.success(f"✅ Η Δοκιμή πέτυχε! Διαβάστηκαν με επιτυχία {len(recs)} εγγραφές από τα PDF.")
+                
+                # --- ΕΜΦΑΝΙΣΗ ΑΠΟΤΕΛΕΣΜΑΤΩΝ ΕΠΙΤΟΠΟΥ ---
+                st.markdown("### 📊 Τι διάβασε το OCR (Αποτελέσματα Δοκιμής):")
+                test_df = pd.DataFrame(recs)
+                # Καθαρισμός διπλότυπων (ίδια ημερομηνία) μόνο για την εμφάνιση της δοκιμής
+                test_df = test_df.sort_values("net_sales", ascending=False).drop_duplicates("date").sort_values("date", ascending=False)
+                
+                test_display = test_df.copy()
+                test_display["date"] = pd.to_datetime(test_display["date"]).dt.strftime("%d/%m/%Y")
+                
+                st.dataframe(
+                    test_display.rename(columns={"date":"ΗΜΕΡΟΜΗΝΙΑ", "net_sales":"ΚΑΘΑΡΕΣ ΠΩΛΗΣΕΙΣ", "customers":"ΠΕΛΑΤΕΣ", "avg_basket":"ΜΟ ΚΑΛΑΘΙΟΥ"})
+                        .style.format({
+                            "ΚΑΘΑΡΕΣ ΠΩΛΗΣΕΙΣ": lambda v: fmt(v),
+                            "ΜΟ ΚΑΛΑΘΙΟΥ": lambda v: fmt(v) if pd.notna(v) else "—",
+                            "ΠΕΛΑΤΕΣ": lambda v: f"{int(v)}" if pd.notna(v) else "—"
+                        }),
+                    use_container_width=True, hide_index=True
+                )
+                
+                saved = merge_in(recs)
+                st.info(f"💾 Αποθηκεύτηκαν {saved} καθαρές εγγραφές στο ιστορικό σας.")
+                
+                # Κουμπί για να καθαρίσει η οθόνη και να ενημερωθούν τα γραφήματα!
+                if st.button("🔄 Ανανέωση Γραφημάτων", use_container_width=True):
+                    st.rerun()
             else:
-                st.markdown(f'<div class="info-box">✅ Ελέγχθηκαν {n_checked} αρχεία PDF αλλά τα δεδομένα υπάρχουν ήδη. Το σύστημα λειτουργεί τέλεια!</div>', unsafe_allow_html=True)
+                st.warning(f"⚠️ Ελέγχθηκαν {n_checked} αρχεία PDF αλλά δεν μπόρεσε να διαβάσει δεδομένα. Δες αν τα αρχεία είναι σωστά.")
 
     elif run_inc and sales_pw:
         with st.spinner("Ανάγνωση πρόσφατων email & OCR..."):
