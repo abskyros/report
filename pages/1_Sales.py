@@ -141,79 +141,59 @@ def get_week_range(d):
 
 # ── OCR ───────────────────────────────────────────────────────────────────────
 def _num(s: str) -> float:
-    s = s.strip().replace(" ","").replace("€","")
+    if not s: return None
+    s = s.strip().replace(" ", "").replace("€", "")
+    
+    # Έξυπνη διαχείριση κόμματος και τελείας με βάση τα ελληνικά format (π.χ. 9.102,82)
     if "." in s and "," in s:
-        s = s.replace(".","").replace(",",".")
+        if s.rfind(",") > s.rfind("."):
+            s = s.replace(".", "").replace(",", ".")
+        else:
+            s = s.replace(",", "")
     elif "," in s:
-        s = s.replace(",",".")
-    return float(s)
-
-def _find(txt: str, patterns: list, lo=None, hi=None):
-    for pat in patterns:
-        m = re.search(pat, txt, re.IGNORECASE)
-        if m:
-            try:
-                v = _num(m.group(1))
-                if lo is not None and v < lo: continue
-                if hi is not None and v > hi: continue
-                return v
-            except: continue
-    return None
+        s = s.replace(",", ".")
+        
+    try:
+        return float(s)
+    except:
+        return None
 
 def extract(pdf_bytes: bytes) -> dict:
-    r = {"date":None,"net_sales":None,"customers":None,"avg_basket":None}
+    r = {"date": None, "net_sales": None, "customers": None, "avg_basket": None}
     try:
         images = convert_from_bytes(pdf_bytes, dpi=200, first_page=1, last_page=3)
-        pages  = [pytesseract.image_to_string(img, lang="ell+eng", config="--psm 6 --oem 3") for img in images]
+        # Χρησιμοποιούμε config --psm 6 για να θεωρεί τη σελίδα ως ένα ενιαίο μπλοκ κειμένου 
+        pages  = [pytesseract.image_to_string(img, lang="ell+eng", config="--psm 6") for img in images]
         txt = "\n".join(pages)
 
-        for pat in [
-            r'[Ff]or\s*[:\-]?\s*(\d{1,2}/\d{1,2}/\d{4})',
-            r'[Ff]or\s*[:\-]?\s*(\d{1,2}\.\d{1,2}\.\d{4})',
-            r'(?:For|FOR)\s+(\d{2}/\d{2}/\d{4})',
-        ]:
-            m = re.search(pat, txt)
-            if m:
-                try:
-                    r["date"] = datetime.strptime(m.group(1).replace(".","/"), "%d/%m/%Y").date()
-                    break
-                except: pass
+        # 1. Ανάγνωση Ημερομηνίας (Matches: "For 19/04/2026" ή "For 19.04.2026")
+        date_m = re.search(r'[Ff]or\s*[:\-]?\s*(\d{1,2})[/\.-](\d{1,2})[/\.-](\d{4})', txt)
+        if date_m:
+            try:
+                r["date"] = date(int(date_m.group(3)), int(date_m.group(2)), int(date_m.group(1)))
+            except: pass
 
-        r["net_sales"] = _find(txt, [
-            r'Ne[i1]tDay[Ss]al[Dd][i1][s5]\s+([\d.,]+)',
-            r'NetDay[Ss]al[Dd]is\s+([\d.,]+)',
-            r'Ne[i1][t7]Day.{0,3}al.{0,3}[i1][s5]\s+([\d.,]+)',
-        ], lo=1000, hi=50000)
+        # 2. Η ΚΑΡΔΙΑ ΤΟΥ ΣΥΣΤΗΜΑΤΟΣ (Στοχεύει απευθείας στο Productivity Totals Block)
+        # Παράδειγμα που διαβάζει: Totals: 9102,82 100.00 339 2,00 4551.41 169.50 26.85
+        # Εξάγει 3 ομάδες: (Τζίρος) (Πελάτες) (ΜΟ Καλαθιού)
+        tot_m = re.search(r'[Tt]ota[l1]s?[:\s]+([\d.,]+)\s+100[.,][0oO]{2}\s+(\d{2,4})\s+[\d.,]+\s+[\d.,]+\s+[\d.,]+\s+([\d.,]+)', txt)
+        if tot_m:
+            r["net_sales"] = _num(tot_m.group(1))
+            r["customers"] = int(tot_m.group(2))
+            r["avg_basket"] = _num(tot_m.group(3))
 
+        # 3. ΜΗΧΑΝΙΣΜΟΙ ΑΣΦΑΛΕΙΑΣ (Αν δεν μπορέσει να διαβάσει τέλεια τη γραμμή Totals)
         if r["net_sales"] is None:
-            m = re.search(r'[Gg]roup[Tt]ot\s+([\d.,]+)\s+([\d.,]+)', txt)
-            if m:
-                try:
-                    v = _num(m.group(2))
-                    if 1000 <= v <= 50000: r["net_sales"] = v
-                except: pass
+            ns_m = re.search(r'NetDay\s*Sal[Dd]is\s*([\d.,]+)', txt, re.IGNORECASE)
+            if ns_m: r["net_sales"] = _num(ns_m.group(1))
 
-        if r["net_sales"] is None:
-            m = re.search(r'[Tt]otals?\s*:?\s*([\d.,]+)\s+100[.,]00\s+([\d]+)', txt)
-            if m:
-                try:
-                    v = _num(m.group(1))
-                    if 1000 <= v <= 50000:
-                        r["net_sales"] = v
-                        cv = int(m.group(2))
-                        if r["customers"] is None and 10 <= cv <= 2000: r["customers"] = cv
-                except: pass
-
-        if r["customers"] is None:
-            for pat in [r'Num[O0]fCus\s+([\d,. ]+)', r'Num[O0]f[Cc]us\s+([\d,. ]+)', r'Num0fCus\s+([\d,. ]+)']:
-                m = re.search(pat, txt, re.IGNORECASE)
-                if m:
-                    try:
-                        v = int(m.group(1).replace(",","").replace(".","").replace(" ",""))
-                        if 10 <= v <= 2000: r["customers"] = v; break
-                    except: pass
-
-        r["avg_basket"] = _find(txt, [r'Avg[Ss]al[Cc]us\s+([\d.,]+)', r'AvgSal[Cc]us\s+([\d.,]+)'], lo=5, hi=500)
+        if r["net_sales"] is None or r["customers"] is None:
+            # Ψάχνει ακολουθία 3 αριθμών (Τζίρος, Πελάτες, Καλάθι) που βρίσκονται κάτω από τα TotSal headers
+            seq_m = re.search(r'TotSal[\s\S]{10,150}?([\d.,]{4,10})\s+(\d{2,4})\s+([\d.,]{2,6})', txt)
+            if seq_m:
+                if r["net_sales"] is None: r["net_sales"] = _num(seq_m.group(1))
+                if r["customers"] is None: r["customers"] = int(seq_m.group(2))
+                if r["avg_basket"] is None: r["avg_basket"] = _num(seq_m.group(3))
 
     except Exception: pass
     return r
