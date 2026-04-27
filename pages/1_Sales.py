@@ -19,8 +19,16 @@ SALES_EMAIL_SENDER = "abf.skyros@gmail.com"
 SALES_SUBJECT_KW   = "ΑΒ ΣΚΥΡΟΣ"
 SALES_CACHE        = "sales_cache.csv"
 SALES_ARCHIVE      = "sales_archive.csv"
-TEST_EMAIL_LIMIT   = 20    # Αριθμός emails για δοκιμαστική λειτουργία
+TEST_EMAIL_LIMIT   = 5     # Αριθμός emails για δοκιμαστική λειτουργία
 DEEP_SCAN_YEARS    = 2
+BATCH_SIZE         = 50    # Emails ανά batch για τη βαθιά σάρωση
+
+# ── SECRETS: Διαβάζουμε App Password από Streamlit Secrets (αν υπάρχει) ────
+_SECRET_PW = ""
+try:
+    _SECRET_PW = st.secrets.get("SALES_EMAIL_PASS", "")
+except:
+    pass
 
 # ── CSS ───────────────────────────────────────────────────────────────────────
 st.markdown("""
@@ -558,70 +566,176 @@ with tab_hist:
 # ═══════════════════════════════════════════════════════════════════════════════
 with tab_update:
     st.markdown('<div class="sh">Σύνδεση Email</div>', unsafe_allow_html=True)
-    st.markdown(f'<div class="info-box">📧 Λογαριασμός: <b>{SALES_EMAIL_USER}</b> — Χρησιμοποιήστε <b>App Password</b> του Gmail.</div>', unsafe_allow_html=True)
-    st.markdown(f'<div class="test-box">🧪 <b>Δοκιμαστική λειτουργία:</b> Η "Δοκιμή 20 Emails" διαβάζει μόνο τα τελευταία {TEST_EMAIL_LIMIT} emails για γρήγορο έλεγχο. Μετά χρησιμοποιήστε "Βαθιά Σάρωση" για όλα.</div>', unsafe_allow_html=True)
 
-    password = st.text_input("🔐 Gmail App Password", type="password", key="sales_pw")
+    # ── Password: από Secrets ή χειροκίνητα ──────────────────────────────────
+    if _SECRET_PW:
+        st.markdown('<div class="info-box">🔐 App Password φορτώθηκε αυτόματα από Streamlit Secrets.</div>', unsafe_allow_html=True)
+        password = _SECRET_PW
+    else:
+        st.markdown('<div class="warn-box">⚠️ Δεν βρέθηκε <b>SALES_EMAIL_PASS</b> στα Secrets. Εισάγετε χειροκίνητα παρακάτω.</div>', unsafe_allow_html=True)
+        password = st.text_input("🔐 Gmail App Password", type="password", key="sales_pw")
+
+    st.markdown(f'<div class="info-box">📧 Λογαριασμός: <b>{SALES_EMAIL_USER}</b> · Αποστολέας: <b>{SALES_EMAIL_SENDER}</b></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="test-box">🧪 <b>Βήμα 1:</b> Πατήστε "Δοκιμή 5 Emails" για να επιβεβαιώσετε τη σύνδεση (χωρίς OCR, &lt;5 δευτ.).<br>⚡ <b>Βήμα 2:</b> "Γρήγορη" για νέα emails.<br>🔍 <b>Βήμα 3:</b> "Βαθιά Σάρωση" μόνο για το ιστορικό (πολύ αργό).</div>', unsafe_allow_html=True)
 
     c1, c2, c3 = st.columns(3)
-    run_preview = c1.button(f"👁 Δοκιμή — Εμφάνιση {TEST_EMAIL_LIMIT} Emails", use_container_width=True)
-    run_quick   = c2.button("⚡ Γρήγορη Ενημέρωση (Νέα)", use_container_width=True)
-    run_deep    = c3.button("🔍 Βαθιά Σάρωση (2 χρόνια)", use_container_width=True)
+    run_preview = c1.button(f"👁 Δοκιμή {TEST_EMAIL_LIMIT} Emails", use_container_width=True)
+    run_quick   = c2.button("⚡ Γρήγορη (Νέα μόνο)", use_container_width=True)
+    run_deep    = c3.button("🔍 Βαθιά Σάρωση", use_container_width=True)
 
-    # ── ΔΟΚΙΜΗ: Εμφανίζει emails ΧΩΡΙΣ OCR (γρήγορο) ────────────────────────
-    if run_preview and password:
-        with st.spinner(f"Σύνδεση και ανάκτηση {TEST_EMAIL_LIMIT} emails..."):
-            preview, errs = preview_emails(password)
-        if errs:
-            st.error(f"❌ Σφάλμα σύνδεσης: {errs[0]}")
-        elif not preview:
-            st.markdown('<div class="warn-box">⚠️ Δεν βρέθηκαν emails από αυτόν τον αποστολέα.</div>', unsafe_allow_html=True)
+    # ── ΔΟΚΙΜΗ: 5 emails χωρίς OCR ──────────────────────────────────────────
+    if run_preview:
+        if not password:
+            st.error("⚠️ Εισάγετε App Password.")
         else:
-            st.success(f"✅ Σύνδεση επιτυχής! Βρέθηκαν {len(preview)} emails.")
-            st.markdown('<div class="info-box">👇 Λίστα emails — επιβεβαιώστε ότι έχουν το σωστό PDF attachment.</div>', unsafe_allow_html=True)
-            st.dataframe(pd.DataFrame(preview), use_container_width=True, hide_index=True)
-            st.markdown('<div class="test-box">✅ Η σύνδεση λειτουργεί! Τώρα πατήστε <b>Γρήγορη Ενημέρωση</b> για να ξεκινήσει το OCR και η αποθήκευση δεδομένων.</div>', unsafe_allow_html=True)
-
-    elif run_preview and not password:
-        st.error("⚠️ Εισάγετε App Password.")
-
-    # ── ΕΝΗΜΕΡΩΣΗ ΜΕ OCR ─────────────────────────────────────────────────────
-    mode = None
-    if run_quick: mode = "quick"
-    if run_deep:  mode = "deep"
-
-    if mode and password:
-        label = "Φόρτωση νέων emails + OCR..." if mode == "quick" else "Βαθιά σάρωση 2 ετών + OCR..."
-        with st.spinner(label):
-            new_recs, errs, checked, with_data = fetch_emails(password, mode=mode)
-
-        if errs:
-            st.error(f"❌ Σφάλμα: {errs[0]}")
-        else:
-            st.markdown(f'<div class="info-box">📬 Ελέγχθηκαν: <b>{checked}</b> emails · με δεδομένα: <b>{with_data}</b></div>', unsafe_allow_html=True)
-            if not new_recs:
-                st.markdown('<div class="info-box">✅ Δεν βρέθηκαν νέα/ενημερωμένα δεδομένα — το σύστημα είναι ενημερωμένο.</div>', unsafe_allow_html=True)
+            with st.spinner(f"Σύνδεση και ανάκτηση {TEST_EMAIL_LIMIT} emails (χωρίς OCR)..."):
+                preview, errs = preview_emails(password)
+            if errs:
+                st.error(f"❌ Σφάλμα σύνδεσης: {errs[0]}")
+            elif not preview:
+                st.markdown('<div class="warn-box">⚠️ Δεν βρέθηκαν emails από αυτόν τον αποστολέα.</div>', unsafe_allow_html=True)
             else:
-                st.success(f"✅ {len(new_recs)} νέες/ενημερωμένες εγγραφές!")
-                prev_df = pd.DataFrame(new_recs)
-                prev_df["date"] = prev_df["date"].apply(lambda d: d.strftime("%d/%m/%Y"))
-                st.dataframe(prev_df, use_container_width=True, hide_index=True)
+                st.success(f"✅ Σύνδεση επιτυχής! Βρέθηκαν {len(preview)} emails.")
+                st.dataframe(pd.DataFrame(preview), use_container_width=True, hide_index=True)
+                st.markdown('<div class="test-box">✅ Η σύνδεση λειτουργεί! Τώρα πατήστε <b>Γρήγορη</b> για OCR και αποθήκευση.</div>', unsafe_allow_html=True)
 
-                # Merge: για κάθε ημέρα κρατάμε τη μεγαλύτερη τιμή
-                old_df  = load_cache()
-                all_new = pd.DataFrame(new_recs)
+    # ── ΓΡΗΓΟΡΗ ΕΝΗΜΕΡΩΣΗ ────────────────────────────────────────────────────
+    if run_quick:
+        if not password:
+            st.error("⚠️ Εισάγετε App Password.")
+        else:
+            with st.spinner("Φόρτωση νέων emails + OCR..."):
+                new_recs, errs, checked, with_data = fetch_emails(password, mode="quick")
+            if errs:
+                st.error(f"❌ Σφάλμα: {errs[0]}")
+            else:
+                st.markdown(f'<div class="info-box">📬 Ελέγχθηκαν: <b>{checked}</b> · με δεδομένα: <b>{with_data}</b></div>', unsafe_allow_html=True)
+                if not new_recs:
+                    st.markdown('<div class="info-box">✅ Δεν βρέθηκαν νέα δεδομένα — ενημερωμένο!</div>', unsafe_allow_html=True)
+                else:
+                    st.success(f"✅ {len(new_recs)} νέες/ενημερωμένες εγγραφές!")
+                    pv = pd.DataFrame(new_recs)
+                    pv["date"] = pv["date"].apply(lambda d: d.strftime("%d/%m/%Y"))
+                    st.dataframe(pv, use_container_width=True, hide_index=True)
+                    old_df = load_cache()
+                    all_new = pd.DataFrame(new_recs)
+                    if not old_df.empty:
+                        old_df = old_df[~old_df["date"].isin(set(all_new["date"]))]
+                    merged = pd.concat([old_df, all_new]).sort_values("date", ascending=False).reset_index(drop=True)
+                    save_cache(merged)
+                    st.rerun()
+
+    # ── ΒΑΘΙΑ ΣΑΡΩΣΗ (batch mode με progress bar) ────────────────────────────
+    if run_deep:
+        if not password:
+            st.error("⚠️ Εισάγετε App Password.")
+        else:
+            st.markdown('<div class="warn-box">⏳ Η βαθιά σάρωση διαβάζει ΟΛΑ τα emails 2 ετών με OCR. Μείνετε στη σελίδα.</div>', unsafe_allow_html=True)
+
+            cutoff = date.today() - timedelta(days=365*DEEP_SCAN_YEARS)
+            df_existing = load_cache()
+
+            # Φέρνουμε πρώτα τη λίστα emails (χωρίς OCR)
+            progress_bar = st.progress(0, text="Σύνδεση στο email...")
+            status_box   = st.empty()
+
+            all_new_recs = []
+            total_checked = 0
+            total_saved   = 0
+
+            try:
+                with MailBox("imap.gmail.com").login(SALES_EMAIL_USER, password) as mb:
+                    criteria = AND(from_=SALES_EMAIL_SENDER)
+                    # Φέρνουμε ΟΛΑ τα μηνύματα πρώτα (headers only = γρήγορο)
+                    all_msgs = list(mb.fetch(criteria, limit=1000, reverse=True,
+                                             mark_seen=False, headers_only=True))
+
+                    # Φιλτράρισμα κατά ημερομηνία
+                    msgs_to_process = []
+                    for msg in all_msgs:
+                        msg_date = msg.date.date() if msg.date else None
+                        if msg_date and msg_date < cutoff:
+                            continue
+                        subj = (msg.subject or "").upper()
+                        if SALES_SUBJECT_KW not in subj and "SKYROS" not in subj:
+                            continue
+                        msgs_to_process.append(msg)
+
+                    total_msgs = len(msgs_to_process)
+                    progress_bar.progress(0, text=f"Βρέθηκαν {total_msgs} emails για επεξεργασία...")
+
+                    if total_msgs == 0:
+                        status_box.warning("Δεν βρέθηκαν emails με το σωστό subject.")
+                    else:
+                        # Τώρα φέρνουμε ΜΕ attachments σε batches
+                        raw_records = []
+                        for i, msg_h in enumerate(msgs_to_process):
+                            pct = int((i+1) / total_msgs * 100)
+                            progress_bar.progress(pct, text=f"OCR {i+1}/{total_msgs}: {msg_h.subject[:40] if msg_h.subject else ''}...")
+                            total_checked += 1
+
+                            try:
+                                # Re-fetch με attachments
+                                full_msgs = list(mb.fetch(
+                                    AND(uid=str(msg_h.uid)),
+                                    mark_seen=False
+                                ))
+                                if not full_msgs:
+                                    continue
+                                msg = full_msgs[0]
+                                pdf_att = next(
+                                    (a for a in msg.attachments
+                                     if a.filename and a.filename.lower().endswith(".pdf")),
+                                    None
+                                )
+                                if not pdf_att:
+                                    continue
+                                rec = extract_sales_from_pdf(pdf_att.payload)
+                                if rec["date"] and rec["net_sales"] is not None:
+                                    raw_records.append(rec)
+                                    total_saved += 1
+                            except Exception as e_inner:
+                                continue  # Skip αποτυχημένα emails
+
+                            # Αποθήκευση κάθε BATCH_SIZE records
+                            if len(raw_records) >= BATCH_SIZE:
+                                deduped = best_record_per_day(raw_records + all_new_recs)
+                                all_new_recs = deduped
+                                raw_records  = []
+                                # Ενδιάμεση αποθήκευση
+                                _old = load_cache()
+                                _new = pd.DataFrame(all_new_recs)
+                                if not _old.empty:
+                                    _old = _old[~_old["date"].isin(set(_new["date"]))]
+                                _merged = pd.concat([_old, _new]).sort_values("date", ascending=False).reset_index(drop=True)
+                                save_cache(_merged)
+                                status_box.success(f"💾 Αποθηκεύτηκαν {total_saved} εγγραφές μέχρι τώρα...")
+
+                        # Τελευταίο batch
+                        if raw_records:
+                            all_new_recs = best_record_per_day(raw_records + all_new_recs)
+
+                progress_bar.progress(100, text="✅ Ολοκληρώθηκε!")
+
+            except Exception as e:
+                st.error(f"❌ Σφάλμα: {e}")
+
+            # Τελική αποθήκευση
+            if all_new_recs:
+                final_new = pd.DataFrame(all_new_recs)
+                old_df = load_cache()
                 if not old_df.empty:
-                    # Αφαιρούμε παλιές εγγραφές που αντικαθίστανται
-                    updated_dates = set(all_new["date"])
-                    old_df = old_df[~old_df["date"].isin(updated_dates)]
-                merged = pd.concat([old_df, all_new]).sort_values("date", ascending=False).reset_index(drop=True)
-                save_cache(merged)
+                    old_df = old_df[~old_df["date"].isin(set(final_new["date"]))]
+                final_merged = pd.concat([old_df, final_new]).sort_values("date", ascending=False).reset_index(drop=True)
+                save_cache(final_merged)
+                st.success(f"🎉 Βαθιά σάρωση ολοκληρώθηκε! {total_checked} emails → {len(all_new_recs)} εγγραφές αποθηκεύτηκαν.")
                 st.rerun()
+            else:
+                st.info("Δεν βρέθηκαν νέα δεδομένα.")
 
-    elif mode and not password:
-        st.error("⚠️ Εισάγετε App Password.")
+    st.markdown('<hr style="border:none;border-top:1px solid #e5e7eb;margin:1.5rem 0"/>', unsafe_allow_html=True)
 
-    # Χειροκίνητη εισαγωγή
+    # ── Χειροκίνητη Εισαγωγή ─────────────────────────────────────────────────
     st.markdown('<div class="sh">Χειροκίνητη Εισαγωγή</div>', unsafe_allow_html=True)
     with st.form("manual_sales"):
         c1, c2, c3, c4 = st.columns(4)
@@ -634,7 +748,7 @@ with tab_update:
                                      "customers": custs if custs > 0 else None,
                                      "avg_basket": avg_b if avg_b > 0 else None}])
             old_df  = load_cache()
-            merged  = pd.concat([old_df, new_row]).drop_duplicates("date").sort_values("date", ascending=False).reset_index(drop=True)
+            merged  = pd.concat([old_df, new_row]).sort_values("net_sales", ascending=False).drop_duplicates("date", keep="first").sort_values("date", ascending=False).reset_index(drop=True)
             save_cache(merged)
             st.success(f"✅ Αποθηκεύτηκε: {entry_date.strftime('%d/%m/%Y')} — {fmt(net_s)}")
             st.rerun()

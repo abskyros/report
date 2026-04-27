@@ -13,6 +13,13 @@ INV_CACHE        = "invoices_cache.csv"
 INV_ARCHIVE      = "invoices_archive.csv"
 DEEP_SCAN_YEARS  = 2
 
+# ── SECRETS ──────────────────────────────────────────────────────────────────
+_SECRET_PW = ""
+try:
+    _SECRET_PW = st.secrets.get("EMAIL_PASS", "")
+except:
+    pass
+
 # ── CSS ───────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
@@ -286,7 +293,12 @@ with tab_update:
     st.markdown('<div class="sh">Σύνδεση Email</div>', unsafe_allow_html=True)
     st.markdown(f'<div class="info-box">📧 Λογαριασμός: <b>{INV_EMAIL_USER}</b> — Αποστολέας: <b>{INV_EMAIL_SENDER}</b><br>Χρησιμοποιήστε <b>App Password</b> του Gmail.</div>', unsafe_allow_html=True)
 
-    inv_pw = st.text_input("🔐 Gmail App Password", type="password", key="inv_pw")
+    if _SECRET_PW:
+        st.markdown('<div class="info-box">🔐 App Password φορτώθηκε αυτόματα από Streamlit Secrets.</div>', unsafe_allow_html=True)
+        inv_pw = _SECRET_PW
+    else:
+        st.markdown('<div class="warn-box">⚠️ Δεν βρέθηκε <b>EMAIL_PASS</b> στα Secrets.</div>', unsafe_allow_html=True)
+        inv_pw = st.text_input("🔐 Gmail App Password", type="password", key="inv_pw")
 
     col_inc, col_full = st.columns(2)
     run_inc  = col_inc.button("⚡ Γρήγορη Ενημέρωση (Νέα μόνο)", use_container_width=True)
