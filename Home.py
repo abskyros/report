@@ -17,45 +17,43 @@ st.markdown("""
 
 * { box-sizing: border-box; font-family: 'Inter', sans-serif !important; }
 html, body, [class*="css"] {
-    background: #f8fafc !important;
+    background: #f1f5f9 !important; /* Ελαφρώς πιο σκούρο γκρι φόντο για αντίθεση με τις κάρτες */
     color: #0f172a !important;
 }
-.stApp { background: #f8fafc !important; }
+.stApp { background: #f1f5f9 !important; }
 section[data-testid="stSidebar"] { display: none !important; }
 #MainMenu, footer, header { visibility: hidden !important; }
-.block-container {
-    padding: 0 !important;
-    max-width: 100% !important;
-}
 
-.wrap {
-    max-width: 1040px;
-    margin: 0 auto;
-    padding: 1.5rem 1.5rem 3rem;
+/* --- ΕΔΩ ΕΙΝΑΙ ΤΟ ΜΥΣΤΙΚΟ ΓΙΑ ΤΟ ΚΕΝΤΡΑΡΙΣΜΑ --- */
+.block-container {
+    padding: 3rem 1.5rem 4rem !important;
+    max-width: 1000px !important; /* Κλειδώνει το μέγιστο πλάτος */
+    margin: 0 auto !important;    /* Το κεντράρει απόλυτα στην οθόνη */
 }
 
 /* ── HERO BANNER ── */
 .hero {
-    background: linear-gradient(to right, rgba(15, 23, 42, 0.95), rgba(15, 23, 42, 0.6)), 
+    background: linear-gradient(to right, rgba(15, 23, 42, 0.95), rgba(15, 23, 42, 0.4)), 
                 url('https://images.unsplash.com/photo-1542838132-92c53300491e?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&q=80') center/cover no-repeat;
-    border-radius: 16px;
-    padding: 3rem 2.5rem;
+    border-radius: 20px;
+    min-height: 240px; /* Σταθερό κομψό ύψος */
+    padding: 2.5rem 3rem;
     color: #ffffff;
     margin-bottom: 2rem;
-    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
     display: flex;
     justify-content: space-between;
     align-items: flex-end;
 }
 .hero-sub {
-    font-size: 0.75rem; font-weight: 700; letter-spacing: 0.2em;
-    text-transform: uppercase; color: #10b981; margin-bottom: 0.5rem;
+    font-size: 0.8rem; font-weight: 700; letter-spacing: 0.25em;
+    text-transform: uppercase; color: #10b981; margin-bottom: 0.6rem;
 }
 .hero-title {
-    font-size: 2.4rem; font-weight: 800; color: #ffffff; line-height: 1.1; margin-bottom: 0.2rem;
+    font-size: 2.5rem; font-weight: 800; color: #ffffff; line-height: 1.1; margin-bottom: 0.2rem;
 }
 .hero-date {
-    text-align: right; font-size: 0.85rem; color: #cbd5e1; font-weight: 500; line-height: 1.5;
+    text-align: right; font-size: 0.9rem; color: #cbd5e1; font-weight: 500; line-height: 1.6;
 }
 
 /* ── WEEK STRIP ── */
@@ -65,93 +63,95 @@ section[data-testid="stSidebar"] { display: none !important; }
     gap: 1px;
     background: #e2e8f0;
     border: 1px solid #e2e8f0;
-    border-radius: 12px;
+    border-radius: 16px;
     overflow: hidden;
-    margin-bottom: 1.5rem;
-    box-shadow: 0 2px 4px rgba(0,0,0,.02);
+    margin-bottom: 2rem;
+    box-shadow: 0 4px 6px -1px rgba(0,0,0,.05);
 }
-.wc { background: #fff; padding: 1rem 1.2rem; }
-.wc-lbl { font-size: 0.6rem; font-weight: 600; letter-spacing: 0.12em;
-    text-transform: uppercase; color: #64748b; margin-bottom: 0.3rem; }
-.wc-val { font-size: 1.2rem; font-weight: 800; color: #0f172a; }
+.wc { background: #fff; padding: 1.2rem 1.5rem; }
+.wc-lbl { font-size: 0.65rem; font-weight: 700; letter-spacing: 0.12em;
+    text-transform: uppercase; color: #64748b; margin-bottom: 0.4rem; }
+.wc-val { font-size: 1.3rem; font-weight: 800; color: #0f172a; }
 .wc-val.g { color: #10b981; }
 .wc-val.b { color: #3b82f6; }
-.wc-val.m { color: #94a3b8; font-size: 0.9rem; font-weight: 500; }
+.wc-val.m { color: #94a3b8; font-size: 1rem; font-weight: 500; }
 
 /* ── CARDS ── */
 .cards {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 1.5rem;
-    margin-bottom: 2rem;
+    margin-bottom: 2.5rem;
 }
 .card {
     background: #fff;
     border: 1px solid #e2e8f0;
-    border-radius: 12px;
+    border-radius: 16px;
     overflow: hidden;
-    box-shadow: 0 4px 6px -1px rgba(0,0,0,.05);
+    box-shadow: 0 10px 15px -3px rgba(0,0,0,.05);
 }
 .card-hdr {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 1rem 1.5rem;
+    padding: 1.2rem 1.5rem;
     border-bottom: 1px solid #f1f5f9;
     background: #f8fafc;
 }
-.card-name { font-size: 0.85rem; font-weight: 700;
+.card-name { font-size: 0.9rem; font-weight: 700;
     letter-spacing: 0.05em; color: #334155; }
-.badge { font-size: 0.6rem; font-weight: 700; letter-spacing: 0.1em;
-    text-transform: uppercase; padding: 0.25rem 0.6rem; border-radius: 6px; }
+.badge { font-size: 0.65rem; font-weight: 700; letter-spacing: 0.1em;
+    text-transform: uppercase; padding: 0.3rem 0.7rem; border-radius: 8px; }
 .b-ok   { background: #dcfce7; color: #15803d; }
 .b-warn { background: #fef9c3; color: #92400e; }
 .b-off  { background: #f1f5f9; color: #94a3b8; }
 
-.card-body { padding: 1rem 1.5rem 1.2rem; }
+.card-body { padding: 1.2rem 1.5rem 1.5rem; }
 .row {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 0.5rem 0;
+    padding: 0.6rem 0;
     border-bottom: 1px solid #f8fafc;
 }
 .row:last-child { border-bottom: none; }
-.rk { font-size: 0.7rem; font-weight: 600; letter-spacing: 0.05em;
+.rk { font-size: 0.75rem; font-weight: 600; letter-spacing: 0.05em;
     text-transform: uppercase; color: #64748b; }
-.rv { font-size: 1rem; font-weight: 700; color: #0f172a; }
-.rv.hero { font-size: 1.3rem; color: #10b981; }
-.rv.blue { font-size: 1.3rem; color: #3b82f6; }
-.rv.nil  { color: #cbd5e1; font-weight: 500; font-style: italic; font-size: 0.85rem; }
+.rv { font-size: 1.05rem; font-weight: 700; color: #0f172a; }
+.rv.hero { font-size: 1.4rem; color: #10b981; }
+.rv.blue { font-size: 1.4rem; color: #3b82f6; }
+.rv.nil  { color: #cbd5e1; font-weight: 500; font-style: italic; font-size: 0.9rem; }
 
 /* ── BUTTONS ── */
 .stButton > button {
-    border-radius: 10px !important;
+    border-radius: 12px !important;
     font-family: 'Inter', sans-serif !important;
-    font-size: 0.9rem !important;
+    font-size: 0.95rem !important;
     font-weight: 700 !important;
-    padding: 0.8rem 1rem !important;
+    padding: 1rem 1.5rem !important;
     width: 100% !important;
     transition: all 0.2s ease !important;
     border: none !important;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.1) !important;
+    box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1) !important;
 }
 .btn-g > button { background: #10b981 !important; color: #ffffff !important; }
-.btn-g > button:hover { background: #059669 !important; transform: translateY(-2px); }
+.btn-g > button:hover { background: #059669 !important; transform: translateY(-3px); box-shadow: 0 10px 15px -3px rgba(16,185,129,0.3) !important; }
 .btn-b > button { background: #3b82f6 !important; color: #ffffff !important; }
-.btn-b > button:hover { background: #2563eb !important; transform: translateY(-2px); }
+.btn-b > button:hover { background: #2563eb !important; transform: translateY(-3px); box-shadow: 0 10px 15px -3px rgba(59,130,246,0.3) !important; }
 
-.nav { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
-.foot { text-align: center; font-size: 0.65rem; color: #cbd5e1; font-weight: 500;
-    padding-top: 1.5rem; border-top: 1px solid #f1f5f9; margin-top: 1rem; }
+.nav { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+.foot { text-align: center; font-size: 0.7rem; color: #94a3b8; font-weight: 500;
+    padding-top: 2rem; margin-top: 2rem; }
 
-/* ── RESPONSIVE ── */
+/* ── RESPONSIVE ΓΙΑ ΚΙΝΗΤΑ ── */
 @media (max-width: 768px) {
-    .hero { flex-direction: column; align-items: flex-start; padding: 2rem 1.5rem; }
-    .hero-date { text-align: left; margin-top: 1rem; }
-    .hero-title { font-size: 1.8rem; }
-    .wstrip { grid-template-columns: 1fr 1fr; }
+    .block-container { padding: 1rem !important; }
+    .hero { flex-direction: column; align-items: flex-start; padding: 2rem 1.5rem; border-radius: 16px; }
+    .hero-date { text-align: left; margin-top: 1.5rem; }
+    .hero-title { font-size: 2rem; }
+    .wstrip { grid-template-columns: 1fr 1fr; border-radius: 12px; }
     .cards { grid-template-columns: 1fr; }
+    .nav { grid-template-columns: 1fr; }
 }
 </style>
 """, unsafe_allow_html=True)
@@ -239,13 +239,11 @@ else:              s_bdg, s_bcls = "N/A",    "b-off"
 i_bdg = "OK"  if (inv_week is not None or inv_month is not None) else "N/A"
 i_bcls= "b-ok" if (inv_week is not None or inv_month is not None) else "b-off"
 
-st.markdown('<div class="wrap">', unsafe_allow_html=True)
-
 # Hero Banner
 st.markdown(f"""
 <div class="hero">
   <div>
-    <div class="hero-sub">Καταστημα 1082 · Σκυρος</div>
+    <div class="hero-sub">Κατάστημα 1082 · Σκύρος</div>
     <div class="hero-title">Business Operations Portal</div>
   </div>
   <div class="hero-date">{dy}, {today.day} {mn} {today.year}<br><span style="color:#10b981;">Εβδομάδα: {wlbl}</span></div>
@@ -334,4 +332,3 @@ with c2:
 st.markdown('</div>', unsafe_allow_html=True)
 
 st.markdown(f'<div class="foot">AB Skyros 1082 · Operations Platform · {today.year}</div>', unsafe_allow_html=True)
-st.markdown('</div>', unsafe_allow_html=True)
