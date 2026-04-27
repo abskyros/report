@@ -73,6 +73,11 @@ def fmt(v):
     return f"{v:,.2f}€".replace(",","X").replace(".",",").replace("X",".")
 
 def _dedup(df):
+    """
+    Η ΚΑΡΔΙΑ ΤΟΥ ΦΙΛΤΡΟΥ: 
+    Ταξινομεί ανά έσοδα, κρατάει ΜΟΝΟ την πρώτη εγγραφή για κάθε ημερομηνία 
+    και πετάει τις διπλότυπες! Έτσι αν έρθουν 4 email για την ίδια μέρα, πιάνει μόνο 1.
+    """
     if df.empty: return df
     return (df.sort_values("net_sales",ascending=False)
               .drop_duplicates("date",keep="first")
@@ -390,11 +395,28 @@ with tab_update:
         st.markdown('<div class="warn-box">⚠️ Δεν βρέθηκε <b>SALES_EMAIL_PASS</b> στα Secrets.</div>', unsafe_allow_html=True)
         sales_pw = st.text_input("🔐 Gmail App Password", type="password", key="sales_pw")
 
-    col_inc, col_full = st.columns(2)
-    run_inc  = col_inc.button("⚡ Γρήγορη Ενημέρωση (Νέα μόνο)", use_container_width=True)
-    run_full = col_full.button("🔍 Βαθιά Σάρωση (2 χρόνια)", use_container_width=True)
+    # Χωρίσαμε τον χώρο σε 3 στήλες τώρα!
+    col_test, col_inc, col_full = st.columns(3)
+    run_test = col_test.button("🧪 Δοκιμή (10 Τελευταία)", use_container_width=True)
+    run_inc  = col_inc.button("⚡ Γρήγορη (Νέα μόνο)", use_container_width=True)
+    run_full = col_full.button("🔍 Βαθιά (2 χρόνια)", use_container_width=True)
 
-    if run_inc and sales_pw:
+    if run_test and sales_pw:
+        with st.spinner("Ανάγνωση των 10 τελευταίων email & OCR..."):
+            # Βάζουμε since=None για να αγνοήσει ημερομηνίες και να φέρει 10 απολύτως τελευταία
+            recs, errs, n_checked = fetch(sales_pw, since=None, limit=10)
+            
+        if errs:
+            st.error(f"❌ Σφάλμα: {errs[0]}")
+        else:
+            saved = merge_in(recs)
+            if saved > 0:
+                st.success(f"✅ Η Δοκιμή πέτυχε! Διαβάστηκαν {n_checked} emails και αποθηκεύτηκαν {saved} καθαρές εγγραφές (αγνοήθηκαν τα διπλότυπα).")
+                st.rerun()
+            else:
+                st.markdown(f'<div class="info-box">✅ Ελέγχθηκαν {n_checked} αρχεία PDF αλλά τα δεδομένα υπάρχουν ήδη. Το σύστημα λειτουργεί τέλεια!</div>', unsafe_allow_html=True)
+
+    elif run_inc and sales_pw:
         with st.spinner("Ανάγνωση πρόσφατων email & OCR..."):
             df_existing = load_cache()
             since_dt = (df_existing["date"].max() - timedelta(days=5)) if not df_existing.empty else None
@@ -441,7 +463,7 @@ with tab_update:
                 st.success(f"✅ Η βαθιά σάρωση ολοκληρώθηκε! Διαβάστηκαν {s['total']} emails και αποθηκεύτηκαν {s['saved']} εγγραφές.")
                 break
 
-    elif (run_inc or run_full) and not sales_pw:
+    elif (run_test or run_inc or run_full) and not sales_pw:
         st.error("Εισάγετε App Password.")
 
     # Stats
