@@ -21,7 +21,7 @@ BATCH_SIZE         = 25
 _SECRET_PW = ""
 try:
     _SECRET_PW = st.secrets.get("SALES_EMAIL_PASS", "")
-    if not _SECRET_PW: # Fallback in case it's named EMAIL_PASS
+    if not _SECRET_PW:
         _SECRET_PW = st.secrets.get("EMAIL_PASS", "")
 except:
     pass
@@ -139,12 +139,10 @@ def get_week_range(d):
     start = d - timedelta(days=d.weekday())
     return start, start + timedelta(days=6)
 
-# ── OCR ───────────────────────────────────────────────────────────────────────
+# ── OCR ENGINE ────────────────────────────────────────────────────────────────
 def _num(s: str) -> float:
     if not s: return None
     s = s.strip().replace(" ", "").replace("€", "")
-    
-    # Έξυπνη διαχείριση κόμματος και τελείας με βάση τα ελληνικά format (π.χ. 9.102,82)
     if "." in s and "," in s:
         if s.rfind(",") > s.rfind("."):
             s = s.replace(".", "").replace(",", ".")
@@ -152,7 +150,6 @@ def _num(s: str) -> float:
             s = s.replace(",", "")
     elif "," in s:
         s = s.replace(",", ".")
-        
     try:
         return float(s)
     except:
@@ -162,38 +159,40 @@ def extract(pdf_bytes: bytes) -> dict:
     r = {"date": None, "net_sales": None, "customers": None, "avg_basket": None}
     try:
         images = convert_from_bytes(pdf_bytes, dpi=200, first_page=1, last_page=3)
-        # Χρησιμοποιούμε config --psm 6 για να θεωρεί τη σελίδα ως ένα ενιαίο μπλοκ κειμένου 
-        pages  = [pytesseract.image_to_string(img, lang="ell+eng", config="--psm 6") for img in images]
-        txt = "\n".join(pages)
+        txt = "\n".join([pytesseract.image_to_string(img, lang="ell+eng", config="--psm 6") for img in images])
 
-        # 1. Ανάγνωση Ημερομηνίας (Matches: "For 19/04/2026" ή "For 19.04.2026")
+        # 1. ΗΜΕΡΟΜΗΝΙΑ
         date_m = re.search(r'[Ff]or\s*[:\-]?\s*(\d{1,2})[/\.-](\d{1,2})[/\.-](\d{4})', txt)
         if date_m:
-            try:
-                r["date"] = date(int(date_m.group(3)), int(date_m.group(2)), int(date_m.group(1)))
+            try: r["date"] = date(int(date_m.group(3)), int(date_m.group(2)), int(date_m.group(1)))
             except: pass
 
-        # 2. Η ΚΑΡΔΙΑ ΤΟΥ ΣΥΣΤΗΜΑΤΟΣ (Στοχεύει απευθείας στο Productivity Totals Block)
-        # Παράδειγμα που διαβάζει: Totals: 9102,82 100.00 339 2,00 4551.41 169.50 26.85
-        # Εξάγει 3 ομάδες: (Τζίρος) (Πελάτες) (ΜΟ Καλαθιού)
-        tot_m = re.search(r'[Tt]ota[l1]s?[:\s]+([\d.,]+)\s+100[.,][0oO]{2}\s+(\d{2,4})\s+[\d.,]+\s+[\d.,]+\s+[\d.,]+\s+([\d.,]+)', txt)
-        if tot_m:
-            r["net_sales"] = _num(tot_m.group(1))
-            r["customers"] = int(tot_m.group(2))
-            r["avg_basket"] = _num(tot_m.group(3))
+        # 2. METHOD A: Ψάχνει το Hourly Productivity Totals (εξαιρετικά ακριβές)
+        hourly_m = re.search(r'([\d.,]{4,10})\s+100[.,][0Oo]{2}\s+(\d{2,4})\s+[\d.,]+\s+[\d.,]+\s+[\d.,]+\s+([\d.,]{2,6})\s+\d{2,5}', txt)
+        if hourly_m:
+            ns = _num(hourly_m.group(1))
+            cus = int(hourly_m.group(2))
+            avg = _num(hourly_m.group(3))
+            if ns and avg and 1000 < ns < 50000 and 10 < cus < 2000:
+                r["net_sales"], r["customers"], r["avg_basket"] = ns, cus, avg
 
-        # 3. ΜΗΧΑΝΙΣΜΟΙ ΑΣΦΑΛΕΙΑΣ (Αν δεν μπορέσει να διαβάσει τέλεια τη γραμμή Totals)
-        if r["net_sales"] is None:
-            ns_m = re.search(r'NetDay\s*Sal[Dd]is\s*([\d.,]+)', txt, re.IGNORECASE)
-            if ns_m: r["net_sales"] = _num(ns_m.group(1))
-
+        # 3. METHOD B: Ψάχνει το "αποτύπωμα" των 4 αριθμών στο Department Report
+        # Διάταξη: [Τζίρος] \s [Πελάτες-Σκέτο Νούμερο] \s [Καλάθι] \s [Είδη]
         if r["net_sales"] is None or r["customers"] is None:
-            # Ψάχνει ακολουθία 3 αριθμών (Τζίρος, Πελάτες, Καλάθι) που βρίσκονται κάτω από τα TotSal headers
-            seq_m = re.search(r'TotSal[\s\S]{10,150}?([\d.,]{4,10})\s+(\d{2,4})\s+([\d.,]{2,6})', txt)
-            if seq_m:
-                if r["net_sales"] is None: r["net_sales"] = _num(seq_m.group(1))
-                if r["customers"] is None: r["customers"] = int(seq_m.group(2))
-                if r["avg_basket"] is None: r["avg_basket"] = _num(seq_m.group(3))
+            for m in re.finditer(r'([\d.,]{4,12})\s+(\d{2,4})\s+([\d.,]{2,6})\s+([\d.,]{3,10})', txt):
+                ns = _num(m.group(1))
+                cus = int(m.group(2))
+                avg = _num(m.group(3))
+                if ns and avg and 1000 < ns < 50000 and 10 < cus < 2000 and 5 < avg < 100:
+                    r["net_sales"], r["customers"], r["avg_basket"] = ns, cus, avg
+                    break
+                    
+        # 4. METHOD C: Fallback μόνο για τον Τζίρο
+        if r["net_sales"] is None:
+            ns_m = re.search(r'NetDay[^\d]{1,15}?([\d.,]{4,10})', txt, re.IGNORECASE)
+            if ns_m: 
+                ns = _num(ns_m.group(1))
+                if ns and 1000 < ns < 50000: r["net_sales"] = ns
 
     except Exception: pass
     return r
@@ -227,7 +226,6 @@ def deep_scan(pw):
     try:
         with MailBox("imap.gmail.com").login(SALES_EMAIL_USER, pw) as mb:
             s["phase"] = "listing"; yield s.copy()
-
             hdrs = [h for h in mb.fetch(AND(from_=SALES_EMAIL_SENDER), limit=3000, reverse=True, mark_seen=False, headers_only=True)
                     if h.date and h.date.date() >= cutoff and _is_valid(h.subject)]
 
@@ -262,7 +260,6 @@ df  = load_all()
 today = date.today()
 
 # ── RENDER ────────────────────────────────────────────────────────────────────
-
 st.markdown("""
 <div class="topbar">
   <div class="ptitle">📊 Πωλήσεις Καταστήματος</div>
@@ -386,10 +383,9 @@ with tab_update:
             if recs:
                 st.success(f"✅ Η Δοκιμή πέτυχε! Διαβάστηκαν με επιτυχία {len(recs)} εγγραφές από τα PDF.")
                 
-                # --- ΕΜΦΑΝΙΣΗ ΑΠΟΤΕΛΕΣΜΑΤΩΝ ΕΠΙΤΟΠΟΥ ---
                 st.markdown("### 📊 Τι διάβασε το OCR (Αποτελέσματα Δοκιμής):")
                 test_df = pd.DataFrame(recs)
-                # Καθαρισμός διπλότυπων (ίδια ημερομηνία) μόνο για την εμφάνιση της δοκιμής
+                # Κρατάμε μόνο τη μία εγγραφή ανά ημερομηνία για τον πίνακα
                 test_df = test_df.sort_values("net_sales", ascending=False).drop_duplicates("date").sort_values("date", ascending=False)
                 
                 test_display = test_df.copy()
@@ -408,7 +404,6 @@ with tab_update:
                 saved = merge_in(recs)
                 st.info(f"💾 Αποθηκεύτηκαν {saved} καθαρές εγγραφές στο ιστορικό σας.")
                 
-                # Κουμπί για να καθαρίσει η οθόνη και να ενημερωθούν τα γραφήματα!
                 if st.button("🔄 Ανανέωση Γραφημάτων", use_container_width=True):
                     st.rerun()
             else:
