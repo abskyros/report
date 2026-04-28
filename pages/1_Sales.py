@@ -6,6 +6,7 @@ from imap_tools import MailBox, AND
 from pdf2image import convert_from_bytes
 import pytesseract
 from PIL import Image
+import time
 
 st.set_page_config(page_title="Πωλήσεις — AB Skyros", page_icon="📊", layout="wide", initial_sidebar_state="collapsed")
 
@@ -177,7 +178,7 @@ def extract(pdf_bytes: bytes) -> dict:
         def attempt_extraction(txt):
             res = {"date": None, "net_sales": None, "customers": None, "avg_basket": None}
             
-            # 🔥 1. ΗΜΕΡΟΜΗΝΙΑ (Στοχεύει μόνο το "Run On" στο κάτω μέρος)
+            # 1. ΗΜΕΡΟΜΗΝΙΑ (Στοχεύει μόνο το "Run On" στο κάτω μέρος)
             date_m = re.search(r'Run\s*On\s*[:\-]?\s*(\d{1,2})[/\.-](\d{1,2})[/\.-](\d{4})', txt, re.IGNORECASE)
             if date_m:
                 try: res["date"] = date(int(date_m.group(3)), int(date_m.group(2)), int(date_m.group(1)))
@@ -550,5 +551,21 @@ with tab_update:
           <div class="kc" style="--a:#6b8fd4"><div class="kl">Από</div><div class="kv" style="font-size:.85rem;">{oldest}</div></div>
           <div class="kc" style="--a:#6b8fd4"><div class="kl">Έως</div><div class="kv" style="font-size:.85rem;">{newest}</div></div>
         </div>""", unsafe_allow_html=True)
+        
+    # --- Danger Zone / Reset ---
+    st.markdown("---")
+    st.markdown('<div class="sh" style="color: #dc2626; border-bottom-color: #fecaca;">⚠️ Επικινδυνη Ζωνη</div>', unsafe_allow_html=True)
+    if st.button("🗑️ Διαγραφή Όλου του Ιστορικού (Reset)", use_container_width=True):
+        deleted = False
+        for f in [SALES_CACHE, SALES_ARCHIVE, "sales_history.csv"]:
+            if os.path.exists(f):
+                os.remove(f)
+                deleted = True
+        if deleted:
+            st.success("✅ Το ιστορικό διαγράφηκε επιτυχώς! Η εφαρμογή είναι πλέον καθαρή.")
+            time.sleep(1)
+            st.rerun()
+        else:
+            st.info("Δεν βρέθηκαν αρχεία ιστορικού για διαγραφή.")
 
 st.markdown("</div>", unsafe_allow_html=True)
