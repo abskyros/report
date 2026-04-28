@@ -125,17 +125,24 @@ def merge_in(recs: list) -> int:
             old = pd.concat([old, pd.DataFrame([r])], ignore_index=True)
             added_or_updated += 1
         else:
-            idx = old[mask].index[0]
-            old_row = old.loc[idx]
-            
-            # Ενημερώνουμε την εγγραφή αν βρήκαμε πλέον πελάτες/καλάθι που έλειπαν
+            idx = old.index[mask].tolist()[0]
+            old_row = old.iloc[idx]
             needs_update = False
-            if pd.isna(old_row['customers']) and not pd.isna(r['customers']): needs_update = True
-            if pd.isna(old_row['avg_basket']) and not pd.isna(r['avg_basket']): needs_update = True
-            if r['net_sales'] > old_row['net_sales']: needs_update = True
             
+            # Εντοπίζει και επιδιορθώνει μόνο τα κενά ή λάθος πεδία (π.χ. αν το avg_basket είχε σωθεί ως < 5)
+            if (pd.isna(old_row['customers']) or old_row['customers'] < 10) and not pd.isna(r['customers']) and r['customers'] > 0:
+                old.at[idx, 'customers'] = r['customers']
+                needs_update = True
+            
+            if (pd.isna(old_row['avg_basket']) or old_row['avg_basket'] < 5) and not pd.isna(r['avg_basket']) and r['avg_basket'] > 0:
+                old.at[idx, 'avg_basket'] = r['avg_basket']
+                needs_update = True
+                
+            if r['net_sales'] and (pd.isna(old_row['net_sales']) or r['net_sales'] > old_row['net_sales']):
+                old.at[idx, 'net_sales'] = r['net_sales']
+                needs_update = True
+                
             if needs_update:
-                old.loc[idx] = r
                 added_or_updated += 1
                 
     if added_or_updated > 0:
@@ -146,7 +153,7 @@ def get_week_range(d):
     start = d - timedelta(days=d.weekday())
     return start, start + timedelta(days=6)
 
-# ── OCR ENGINE ΜΕ SMART SEQUENCE HUNTER V2 ────────────────────────────────────
+# ── OCR ENGINE MAX-ACCURACY (V3) ──────────────────────────────────────────────
 def _num(s: str) -> float:
     if not s: return None
     s = s.strip().replace(" ", "").replace("€", "")
@@ -165,12 +172,14 @@ def _num(s: str) -> float:
 def extract(pdf_bytes: bytes) -> dict:
     r = {"date": None, "net_sales": None, "customers": None, "avg_basket": None}
     try:
-        images = convert_from_bytes(pdf_bytes, dpi=200, first_page=1, last_page=1)
+        # ⚠️ ΠΛΕΟΝ ΔΙΑΒΑΖΟΥΜΕ ΕΩΣ 2 ΣΕΛΙΔΕΣ ΓΙΑ ΝΑ ΠΙΑΣΟΥΜΕ ΤΑ ΣΥΝΟΛΑ ΠΟΥ ΠΕΦΤΟΥΝ ΠΙΣΩ
+        images = convert_from_bytes(pdf_bytes, dpi=200, first_page=1, last_page=2)
         if not images: return r
-        img = images[0]
 
         def attempt_extraction(txt):
             res = {"date": None, "net_sales": None, "customers": None, "avg_basket": None}
+            
+            # --- 1. Date Hunter ---
             date_m = re.search(r'Run\s*[Oo0]n\s*[:\-]?\s*(\d{1,2})[/\.-](\d{1,2})[/\.-](\d{4})', txt, re.IGNORECASE)
             if date_m:
                 try: res["date"] = date(int(date_m.group(3)), int(date_m.group(2)), int(date_m.group(1)))
@@ -183,24 +192,52 @@ def extract(pdf_bytes: bytes) -> dict:
                         res["date"] = f_date - timedelta(days=1)
                     except: pass
 
-            raw_nums = re.findall(r'\d+[.,\d]*', txt)
-            valid_nums = []
-            for rn in raw_nums:
-                val = _num(rn.rstrip('.,'))
-                if val is not None: valid_nums.append(val)
+            # --- 2. The "Totals" Anchor (Most Accurate) ---
+            # Ψάχνει την γραμμή: "Totals: 8959,47 100.00 332 2,00 4479.74 166.00 26.99" που είναι στη σελίδα 1 ή 2
+            totals_m = re.search(r'Totals:\s*([\d.,]{4,10})\s+100[.,]00\s+(\d{2,4})\s+[\d.,]+\s+[\d.,]+\s+[\d.,]+\s+([\d.,]{2,6})', txt, re.IGNORECASE)
+            if totals_m:
+                ns = _num(totals_m.group(1))
+                cus = int(totals_m.group(2))
+                ab = _num(totals_m.group(3))
+                if ns and 1000 < ns < 50000: res["net_sales"] = ns
+                if 10 < cus < 3000: res["customers"] = cus
+                if 5 < ab < 150: res["avg_basket"] = ab
 
+            # Αν δεν βρει τα Σύνολα, επιστρέφει στους Fallbacks
             clean_txt = re.sub(r'\s+', '', txt).upper()
-            ns_m = re.search(r'NETDAYSAL[A-Z0-9]*[^\d]*([\d.,]{4,12})', clean_txt)
-            if ns_m:
-                val = _num(ns_m.group(1).rstrip('.,'))
-                if val and 1000 < val < 50000: res["net_sales"] = val
             if not res["net_sales"]:
-                ns_m2 = re.search(r'NETDAY[^\d]{1,15}?([\d.,]{4,10})', clean_txt)
-                if ns_m2: 
-                    ns = _num(ns_m2.group(1).rstrip('.,'))
-                    if ns and 1000 < ns < 50000: res["net_sales"] = ns
+                ns_m = re.search(r'NETDAYSAL[A-Z0-9]*[^\d]*([\d.,]{4,12})', clean_txt)
+                if ns_m:
+                    val = _num(ns_m.group(1).rstrip('.,'))
+                    if val and 1000 < val < 50000: res["net_sales"] = val
+                if not res["net_sales"]:
+                    ns_m2 = re.search(r'NETDAY[^\d]{1,15}?([\d.,]{4,10})', clean_txt)
+                    if ns_m2: 
+                        ns = _num(ns_m2.group(1).rstrip('.,'))
+                        if ns and 1000 < ns < 50000: res["net_sales"] = ns
 
-            if res["net_sales"] is not None:
+            # --- 3. Squash Hunter V3 (Επιθετικό κόψιμο κολλημένων αριθμών) ---
+            if res["net_sales"] is not None and (res["customers"] is None or res["avg_basket"] is None):
+                ns_val = res["net_sales"]
+                # Δημιουργεί πιθανά strings που μπορεί να διάβασε το OCR, πχ "8.959,47" ή "8959,47"
+                s1 = f"{ns_val:,.2f}".replace(',', 'X').replace('.', ',').replace('X', r'\.') 
+                s2 = f"{ns_val:.2f}".replace('.', r'\.')
+                
+                # Ψάχνει το Τζίρο κολλημένο με 3-4 ψηφία (πελάτες) και άλλα 4-5 ψηφία (καλάθι) -> Π.χ. 8.959,4733226,99
+                pattern = r'(' + s1 + r'|' + s2 + r')(\d{2,4})(\d{1,3}[,.]\d{2})'
+                matches = re.findall(pattern, clean_txt)
+                for m in matches:
+                    c_val = int(m[1])
+                    ab_val = _num(m[2])
+                    if 10 < c_val < 3000 and 5 < ab_val < 150:
+                        if res["customers"] is None: res["customers"] = c_val
+                        if res["avg_basket"] is None: res["avg_basket"] = ab_val
+                        break
+                        
+            # --- 4. Sequence Hunter ---
+            if res["net_sales"] is not None and (res["customers"] is None or res["avg_basket"] is None):
+                raw_nums = re.findall(r'\d+[.,\d]*', txt)
+                valid_nums = [_num(rn.rstrip('.,')) for rn in raw_nums if _num(rn.rstrip('.,')) is not None]
                 for i, val in enumerate(valid_nums):
                     if val == res["net_sales"]:
                         tc, ta = None, None
@@ -210,23 +247,31 @@ def extract(pdf_bytes: bytes) -> dict:
                             elif tc is not None and ta is None and 5 < nxt < 150:
                                 ta = nxt
                                 break
-                        if tc: res["customers"] = tc
-                        if ta: res["avg_basket"] = ta
+                        if tc and not res["customers"]: res["customers"] = tc
+                        if ta and not res["avg_basket"]: res["avg_basket"] = ta
                         break
             return res
 
+        # Σαρώνουμε τις σελίδες σε ένα ενιαίο κείμενο (πλέον σπάνια χρειαζόμαστε rotations λόγω της 2ης σελίδας)
         rotations = [None, Image.ROTATE_270, Image.ROTATE_90, Image.ROTATE_180]
         best_result = r
         best_score = -1
+        
         for rot in rotations:
-            img_to_ocr = img.transpose(rot) if rot is not None else img
-            txt = pytesseract.image_to_string(img_to_ocr, lang="ell+eng", config="--psm 6")
+            txt = ""
+            for img in images:
+                img_to_ocr = img.transpose(rot) if rot is not None else img
+                txt += pytesseract.image_to_string(img_to_ocr, lang="ell+eng", config="--psm 6") + "\n"
+                
             parsed = attempt_extraction(txt)
-            score = (1 if parsed["date"] else 0) + (2 if parsed["net_sales"] else 0) + (1 if parsed["customers"] else 0)
+            score = (1 if parsed["date"] else 0) + (2 if parsed["net_sales"] else 0) + (1 if parsed["customers"] else 0) + (1 if parsed["avg_basket"] else 0)
+            
             if score > best_score:
                 best_score = score
                 best_result = parsed
-            if best_score >= 4: return best_result
+            if best_score >= 5: # 100% Επιτυχία
+                return best_result
+                
         r = best_result
     except Exception: pass
     return r
@@ -252,13 +297,14 @@ def fetch_smart(pw, date_start=None, date_end=None, max_to_find=30, msg_limit=20
     except Exception as e: st.error(f"Σφάλμα σύνδεσης: {e}")
     return recs, n_checked
 
-def repair_bad_records(pw):
+def repair_bad_records(pw, info_box):
     """ Ελέγχει το ιστορικό για μέρες με ελλιπή στοιχεία και τα κατεβάζει ξανά στοχευμένα """
     df = load_all()
     if df.empty: return 0, 0
     
-    # Εντοπίζει τις ημερομηνίες που λείπει ο αριθμός πελατών ή το καλάθι
-    bad_mask = df['customers'].isna() | df['avg_basket'].isna()
+    # Εντοπίζει Ημερομηνίες που δεν έχουν Πελάτες/Καλάθι ή έχουν απίθανα χαμηλά νούμερα
+    bad_mask = (df['customers'].isna() | df['avg_basket'].isna() | 
+                (df['customers'] < 10) | (df['avg_basket'] < 5))
     bad_dates = df[bad_mask]['date'].tolist()
     
     if not bad_dates: return 0, 0
@@ -267,8 +313,10 @@ def repair_bad_records(pw):
     try:
         with MailBox("imap.gmail.com").login(SALES_EMAIL_USER, pw) as mb:
             for b_date in bad_dates:
+                info_box.info(f"🔍 Επιδιόρθωση σε εξέλιξη: Γίνεται έλεγχος για την **{b_date.strftime('%d/%m/%Y')}**...")
+                
                 d_start = b_date
-                d_end = b_date + timedelta(days=2) # Ψάχνει το email της ίδιας ή επόμενης μέρας
+                d_end = b_date + timedelta(days=3) # Ασφαλές παράθυρο 3 ημερών
                 criteria = AND(from_=SALES_EMAIL_SENDER, date_gte=d_start, date_lt=d_end)
                 
                 for msg in mb.fetch(criteria, limit=5):
@@ -278,9 +326,9 @@ def repair_bad_records(pw):
                     
                     rec = extract(pdf.payload)
                     # Αν η επανεξέταση βρήκε τα στοιχεία, τα συγχωνεύει
-                    if rec["date"] == b_date and rec["customers"] is not None:
+                    if rec["date"] == b_date and rec["customers"] is not None and rec["avg_basket"] is not None:
                         fixed_count += merge_in([rec])
-                        break # Βρέθηκε και φτιάχτηκε, πάμε στην επόμενη προβληματική μέρα
+                        break 
     except: pass
     
     return len(bad_dates), fixed_count
@@ -405,11 +453,12 @@ with tab_update:
     if st.button("🛠️ Έλεγχος & Επιδιόρθωση Δεδομένων", use_container_width=True):
         if not sales_pw: st.error("Βάλτε κωδικό.")
         else:
-            with st.spinner("Γίνεται σάρωση του ιστορικού για ελλιπή στοιχεία..."):
-                bad_count, fixed_count = repair_bad_records(sales_pw)
-                if bad_count == 0:
-                    st.success("✅ Όλα τα δεδομένα σας (και οι 470 μέρες) είναι ήδη πλήρη και 100% σωστά!")
-                else:
-                    st.success(f"✅ Εντοπίστηκαν {bad_count} μέρες με ελλείψεις (π.χ. χωρίς πελάτες) και επιδιορθώθηκαν επιτυχώς οι {fixed_count} από αυτές!")
-                time.sleep(3)
-                st.rerun()
+            progress_box = st.empty()
+            bad_count, fixed_count = repair_bad_records(sales_pw, progress_box)
+            
+            if bad_count == 0:
+                progress_box.success("✅ Όλα τα δεδομένα σας είναι ήδη πλήρη και 100% σωστά! Δεν βρέθηκαν κενά.")
+            else:
+                progress_box.success(f"✅ Εντοπίστηκαν {bad_count} μέρες με ελλείψεις και **επιδιορθώθηκαν επιτυχώς** οι {fixed_count} από αυτές!")
+            time.sleep(4)
+            st.rerun()
