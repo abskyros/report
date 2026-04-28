@@ -140,7 +140,7 @@ def get_week_range(d):
     start = d - timedelta(days=d.weekday())
     return start, start + timedelta(days=6)
 
-# ── OCR ENGINE ΜΕ AUTO-ROTATION ───────────────────────────────────────────────
+# ── OCR ENGINE ΜΕ SCORING & SEQUENCE HUNTER ───────────────────────────────────
 def _num(s: str) -> float:
     if not s: return None
     s = s.strip().replace(" ", "").replace("€", "")
@@ -159,31 +159,51 @@ def _num(s: str) -> float:
 def extract(pdf_bytes: bytes) -> dict:
     r = {"date": None, "net_sales": None, "customers": None, "avg_basket": None}
     try:
-        # Μετατροπή PDF σε λίστα εικόνων
         images = convert_from_bytes(pdf_bytes, dpi=200, first_page=1, last_page=3)
 
-        # Συνάρτηση που επιχειρεί να εξάγει δεδομένα από ένα κείμενο
         def attempt_extraction(txt):
             res = {"date": None, "net_sales": None, "customers": None, "avg_basket": None}
             
+            # 1. ΗΜΕΡΟΜΗΝΙΑ
             date_m = re.search(r'[Ff]or\s*[:\-]?\s*(\d{1,2})[/\.-](\d{1,2})[/\.-](\d{4})', txt)
             if date_m:
                 try: res["date"] = date(int(date_m.group(3)), int(date_m.group(2)), int(date_m.group(1)))
                 except: pass
 
-            hourly_m = re.search(r'([\d.,]{4,10})\s+100[.,][0Oo]{2}\s+(\d{2,4})\s+[\d.,]+\s+[\d.,]+\s+[\d.,]+\s+([\d.,]{2,6})\s+\d{2,5}', txt)
-            if hourly_m:
-                ns, cus, avg = _num(hourly_m.group(1)), int(hourly_m.group(2)), _num(hourly_m.group(3))
-                if ns and avg and 1000 < ns < 50000 and 10 < cus < 2000:
-                    res["net_sales"], res["customers"], res["avg_basket"] = ns, cus, avg
+            # 2. SEQUENCE HUNTER (Αναζήτηση Μαθηματικής Ακολουθίας)
+            # Ψάχνουμε όλα τα νούμερα του κειμένου σε μια λίστα
+            raw_nums = re.findall(r'\b\d+[.,\d]*\b', txt)
+            valid_nums = []
+            for rn in raw_nums:
+                val = _num(rn)
+                if val is not None:
+                    valid_nums.append((val, val.is_integer()))
 
-            if res["net_sales"] is None or res["customers"] is None:
-                for m in re.finditer(r'([\d.,]{4,12})\s+(\d{2,4})\s+([\d.,]{2,6})\s+([\d.,]{3,10})', txt):
-                    ns, cus, avg = _num(m.group(1)), int(m.group(2)), _num(m.group(3))
-                    if ns and avg and 1000 < ns < 50000 and 10 < cus < 2000 and 5 < avg < 100:
-                        res["net_sales"], res["customers"], res["avg_basket"] = ns, cus, avg
-                        break
+            # Σαρώνουμε τη λίστα για την τριπλέτα: [Τζίρος] -> [Ακέραιος] -> [ΜΟ]
+            for i in range(len(valid_nums) - 2):
+                v1, _ = valid_nums[i]
+                if not (1000 < v1 < 50000): continue # Πρέπει να μοιάζει με Τζίρο
+                
+                # Κοιτάμε τα επόμενα 8 νούμερα για να βρούμε τους πελάτες (σε περίπτωση που το OCR έβαλε "σκουπίδια" ενδιάμεσα)
+                for j in range(i+1, min(i+8, len(valid_nums)-1)):
+                    v2, is_int2 = valid_nums[j]
+                    if not (10 < v2 < 3000 and is_int2): continue # Πρέπει να είναι Ακέραιος (Πελάτες)
+                    
+                    # Κοιτάμε τα αμέσως επόμενα 8 νούμερα για το Καλάθι
+                    for k in range(j+1, min(j+8, len(valid_nums))):
+                        v3, _ = valid_nums[k]
+                        if not (5 < v3 < 150): continue # Πρέπει να μοιάζει με Μέσο Καλάθι
                         
+                        # ΒΡΗΚΑΜΕ ΤΗΝ ΑΚΟΛΟΥΘΙΑ!
+                        if res["net_sales"] is None:
+                            res["net_sales"] = v1
+                            res["customers"] = int(v2)
+                            res["avg_basket"] = v3
+                        break
+                    if res["net_sales"] is not None: break
+                if res["net_sales"] is not None: break
+
+            # 3. FALLBACK: Σε περίπτωση που δεν βρει την τριπλέτα, ψάχνει τουλάχιστον τον τζίρο
             if res["net_sales"] is None:
                 ns_m = re.search(r'NetDay[^\d]{1,15}?([\d.,]{4,10})', txt, re.IGNORECASE)
                 if ns_m: 
@@ -192,30 +212,35 @@ def extract(pdf_bytes: bytes) -> dict:
                     
             return res
 
-        # 🔄 AUTO-ROTATION ENGINE
-        # Δοκιμάζει 1: Κανονικά, 2: 270 Μοίρες (Σύνηθες στα Landscape), 3: 90 Μοίρες, 4: Ανάποδα
+        # 🔄 AUTO-ROTATION ENGINE & SCORING (Βαθμολογία)
         rotations = [None, Image.ROTATE_270, Image.ROTATE_90, Image.ROTATE_180]
         
         best_result = r
+        best_score = -1
+        
         for rot in rotations:
             txt_parts = []
             for img in images:
-                if rot is not None:
-                    img_to_ocr = img.transpose(rot)
-                else:
-                    img_to_ocr = img
+                img_to_ocr = img.transpose(rot) if rot is not None else img
                 txt_parts.append(pytesseract.image_to_string(img_to_ocr, lang="ell+eng", config="--psm 6"))
             
             full_txt = "\n".join(txt_parts)
             parsed = attempt_extraction(full_txt)
             
-            # Αν βρει και Ημερομηνία και Τζίρο, σταματάει αμέσως την αναζήτηση!
-            if parsed["date"] is not None and parsed["net_sales"] is not None:
-                return parsed
-                
-            # Κρατάει το καλύτερο αποτέλεσμα σε περίπτωση που δεν βρει κάτι τέλειο
-            if parsed["net_sales"] is not None:
+            # --- Υπολογισμός Score ---
+            score = 0
+            if parsed["date"] is not None: score += 1
+            if parsed["net_sales"] is not None: score += 1
+            if parsed["customers"] is not None: score += 1
+            if parsed["avg_basket"] is not None: score += 1
+            
+            if score > best_score:
+                best_score = score
                 best_result = parsed
+                
+            # Αν πετύχει το ΤΕΛΕΙΟ 4/4, σταματάει αμέσως (κερδίζουμε χρόνο!)
+            if score == 4:
+                return best_result
                 
         r = best_result
 
