@@ -150,7 +150,7 @@ def get_week_range(d):
     start = d - timedelta(days=d.weekday())
     return start, start + timedelta(days=6)
 
-# ── OCR ENGINE ────────────────────────────────────────────────────────────────
+# ── OCR ENGINE ΜΕ SMART SEQUENCE HUNTER V2 ────────────────────────────────────
 def _num(s: str) -> float:
     if not s: return None
     s = s.strip().replace(" ", "").replace("€", "")
@@ -169,7 +169,6 @@ def _num(s: str) -> float:
 def extract(pdf_bytes: bytes) -> dict:
     r = {"date": None, "net_sales": None, "customers": None, "avg_basket": None}
     try:
-        # Συνεχίζουμε να διαβάζουμε ΜΟΝΟ την 1η σελίδα για ΜΕΓΙΣΤΗ ΤΑΧΥΤΗΤΑ
         images = convert_from_bytes(pdf_bytes, dpi=200, first_page=1, last_page=1)
         if not images: return r
         img = images[0]
@@ -177,50 +176,86 @@ def extract(pdf_bytes: bytes) -> dict:
         def attempt_extraction(txt):
             res = {"date": None, "net_sales": None, "customers": None, "avg_basket": None}
             
-            # 🔥 ΒΗΜΑ 1: Ψάχνει το "Run On" (μπορεί να είναι στο τέλος της 1ης σελίδας)
+            # 1. DATE HUNTER
             date_m = re.search(r'Run\s*[Oo0]n\s*[:\-]?\s*(\d{1,2})[/\.-](\d{1,2})[/\.-](\d{4})', txt, re.IGNORECASE)
             if date_m:
                 try: res["date"] = date(int(date_m.group(3)), int(date_m.group(2)), int(date_m.group(1)))
                 except: pass
 
-            # 🔥 ΒΗΜΑ 2: Η ΕΞΥΠΝΗ ΔΙΟΡΘΩΣΗ - FALLBACK
-            # Αν ο πίνακας ήταν μεγάλος και το "Run On" έπεσε στη 2η σελίδα, το OCR δεν το βλέπει.
-            # ΑΛΛΑ, στην κορυφή της 1ης σελίδας υπάρχει ΠΑΝΤΑ το "For ΗΗ/ΜΜ/ΕΕΕΕ".
             if not res["date"]:
                 fallback_m = re.search(r'[Ff][Oo0]r\s*[:\-]?\s*(\d{1,2})[/\.-](\d{1,2})[/\.-](\d{4})', txt)
                 if fallback_m:
                     try:
                         f_date = date(int(fallback_m.group(3)), int(fallback_m.group(2)), int(fallback_m.group(1)))
-                        # Το EOD του συστήματος βγάζει ημερομηνία "For" μια μέρα ΜΠΡΟΣΤΑ από το Run On!
-                        # Άρα του αφαιρούμε 1 μέρα και βρίσκουμε την ακριβή ημερομηνία πωλήσεων.
                         res["date"] = f_date - timedelta(days=1)
                     except: pass
 
-            # ΒΗΜΑ 3: KEYWORD HUNTER (Πιο ελαστικό σε περίπτωση που το OCR διαβάσει NetDaySaldis σαν NetDaySalOis)
+            # 🔥 ΛΗΨΗ ΟΛΩΝ ΤΩΝ ΑΡΙΘΜΩΝ (Αγνοεί γράμματα/κολλημένες λέξεις)
+            raw_nums = re.findall(r'\d+[.,\d]*', txt)
+            valid_nums = []
+            for rn in raw_nums:
+                val = _num(rn.rstrip('.,'))
+                if val is not None:
+                    valid_nums.append(val)
+
             clean_txt = re.sub(r'\s+', '', txt).upper()
             
+            # 2. KEYWORD HUNTER (Ψάχνει το Net Sales Ποσό)
             ns_m = re.search(r'NETDAYSAL[A-Z0-9]*[^\d]*([\d.,]{4,12})', clean_txt)
             if ns_m:
-                val = _num(ns_m.group(1))
+                val = _num(ns_m.group(1).rstrip('.,'))
                 if val and 1000 < val < 50000: res["net_sales"] = val
                 
-            nc_m = re.search(r'NUMOFCUS[A-Z0-9]*[^\d]*(\d{2,4})', clean_txt)
-            if nc_m:
-                val = int(nc_m.group(1))
-                if 10 < val < 3000: res["customers"] = val
-                
-            ab_m = re.search(r'AVGSALCUS[A-Z0-9]*[^\d]*([\d.,]{2,6})', clean_txt)
-            if ab_m:
-                val = _num(ab_m.group(1))
-                if val and 5 < val < 150: res["avg_basket"] = val
-
-            # FALLBACK ΓΙΑ ΤΟΝ ΤΖΙΡΟ
-            if res["net_sales"] is None:
-                ns_m = re.search(r'NETDAY[^\d]{1,15}?([\d.,]{4,10})', clean_txt)
-                if ns_m: 
-                    ns = _num(ns_m.group(1))
+            if not res["net_sales"]:
+                ns_m2 = re.search(r'NETDAY[^\d]{1,15}?([\d.,]{4,10})', clean_txt)
+                if ns_m2: 
+                    ns = _num(ns_m2.group(1).rstrip('.,'))
                     if ns and 1000 < ns < 50000: res["net_sales"] = ns
-                    
+
+            # 3. SMART SEQUENCE HUNTER (Χρησιμοποιεί τον τζίρο σαν άγκυρα!)
+            if res["net_sales"] is not None:
+                # Βρίσκει πού είναι ο τζίρος στη λίστα των αριθμών
+                for i, val in enumerate(valid_nums):
+                    if val == res["net_sales"]:
+                        tc = res["customers"]
+                        ta = res["avg_basket"]
+                        # Ψάχνει τους αμέσως επόμενους 10 αριθμούς για να βρει τους πελάτες και το καλάθι
+                        for j in range(i + 1, min(i + 10, len(valid_nums))):
+                            nxt = valid_nums[j]
+                            # Οι Πελάτες είναι πάντα ένας ακέραιος από 10 έως 3000
+                            if tc is None and 10 < nxt < 3000 and nxt.is_integer():
+                                tc = int(nxt)
+                            # Το καλάθι είναι ο αμέσως επόμενος αριθμός (συνήθως δεκαδικός) μεταξύ 5 και 150
+                            elif tc is not None and ta is None and 5 < nxt < 150:
+                                ta = nxt
+                                break
+                        
+                        if tc is not None: res["customers"] = tc
+                        if ta is not None: res["avg_basket"] = ta
+                        
+                        if res["customers"] is not None and res["avg_basket"] is not None:
+                            break
+
+            # 4. FULL SEQUENCE BACKUP (Αν όλα τα άλλα αποτύχουν)
+            if res["net_sales"] is None:
+                for i in range(len(valid_nums) - 2):
+                    v1 = valid_nums[i]
+                    if 1000 < v1 < 50000:
+                        if res["date"] and v1 == res["date"].year:
+                            continue  # Αποφυγή μπερδέματος με τη χρονολογία
+                        for j in range(i+1, min(i+6, len(valid_nums)-1)):
+                            v2 = valid_nums[j]
+                            if 10 < v2 < 3000 and v2.is_integer():
+                                for k in range(j+1, min(j+4, len(valid_nums))):
+                                    v3 = valid_nums[k]
+                                    if 5 < v3 < 150:
+                                        res["net_sales"] = v1
+                                        res["customers"] = int(v2)
+                                        res["avg_basket"] = v3
+                                        break
+                                if res["net_sales"]: break
+                        if res["net_sales"]: break
+                        
             return res
 
         rotations = [None, Image.ROTATE_270, Image.ROTATE_90, Image.ROTATE_180]
@@ -242,7 +277,7 @@ def extract(pdf_bytes: bytes) -> dict:
                 best_score = score
                 best_result = parsed
                 
-            if parsed["date"] is not None and parsed["net_sales"] is not None:
+            if parsed["date"] is not None and parsed["net_sales"] is not None and parsed["customers"] is not None:
                 return best_result
                 
         r = best_result
@@ -258,16 +293,13 @@ def fetch(pw, since: date | None = None, max_records: int = 30):
     recs, errs, n = [], [], 0
     try:
         with MailBox("imap.gmail.com").login(SALES_EMAIL_USER, pw) as mb:
-            # Τραβάμε μέχρι 500 emails για να προσπεράσουμε άσχετα (πχ πρόσληψη ΕΡΓΑΝΗ)
             for msg in mb.fetch(AND(from_=SALES_EMAIL_SENDER), limit=500, reverse=True, mark_seen=False):
                 if len(recs) >= max_records: 
                     break
                 
                 d = msg.date.date() if msg.date else None
-                
                 if since and d and d < since: 
                     break
-                
                 if not _is_valid(msg.subject): continue
                 
                 pdf = next((a for a in msg.attachments if a.filename and a.filename.lower().endswith(".pdf")), None)
