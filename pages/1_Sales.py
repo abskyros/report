@@ -268,25 +268,39 @@ def extract(pdf_bytes: bytes) -> dict:
     except Exception: pass
     return r
 
-# ── EMAIL FETCHING ────────────────────────────────────────────────────────────
+# ── EMAIL FETCHING ΜΕ ΝΕΑ ΛΟΓΙΚΗ ΑΝΑΖΗΤΗΣΗΣ ───────────────────────────────────
 def _is_valid(subj):
     s = (subj or "").upper()
     return SALES_SUBJECT_KW in s or "SKYROS" in s
 
-def fetch(pw, since: date | None = None, limit: int = 60):
+def fetch(pw, since: date | None = None, max_records: int = 30):
     recs, errs, n = [], [], 0
     try:
         with MailBox("imap.gmail.com").login(SALES_EMAIL_USER, pw) as mb:
-            for msg in mb.fetch(AND(from_=SALES_EMAIL_SENDER), limit=limit, reverse=True, mark_seen=False):
+            # Τραβάμε μέχρι 500 emails ώστε να αγνοήσουμε τα "άσχετα" έγγραφα
+            # Σταματάει μόνο όταν βρει όντως max_records (πχ 30) πωλήσεις
+            for msg in mb.fetch(AND(from_=SALES_EMAIL_SENDER), limit=500, reverse=True, mark_seen=False):
+                if len(recs) >= max_records: 
+                    break
+                
                 d = msg.date.date() if msg.date else None
-                if since and d and d < since: continue
+                
+                # Αν έχει δωθεί ημερομηνία since και φτάσαμε σε παλιότερη, σταματάμε
+                if since and d and d < since: 
+                    break
+                
                 if not _is_valid(msg.subject): continue
+                
                 pdf = next((a for a in msg.attachments if a.filename and a.filename.lower().endswith(".pdf")), None)
                 if not pdf: continue
-                n += 1
+                
+                n += 1  # Μετράμε πόσα PDF περάσαμε από το OCR
                 rec = extract(pdf.payload)
+                
+                # Αν όντως διάβασε τζίρο, το κρατάμε (αγνοεί έτσι έγγραφα ΕΡΓΑΝΗ κλπ)
                 if rec["date"] and rec["net_sales"] is not None:
                     recs.append(rec)
+                    
     except Exception as e: errs.append(str(e))
     return recs, errs, n
 
@@ -453,16 +467,16 @@ with tab_update:
     run_full = col_full.button("🔍 Βαθιά (2 χρόνια)", use_container_width=True)
 
     if run_test and sales_pw:
-        with st.spinner("Ανάγνωση των 10 τελευταίων email & OCR... (Ασφαλής Λειτουργία)"):
-            recs, errs, n_checked = fetch(sales_pw, since=None, limit=10)
+        with st.spinner("Σάρωση email για να βρεθούν οι 10 τελευταίες πωλήσεις..."):
+            recs, errs, n_checked = fetch(sales_pw, since=None, max_records=10)
             
         if errs:
             st.error(f"❌ Σφάλμα: {errs[0]}")
         else:
             if recs:
-                st.success(f"✅ Η Δοκιμή πέτυχε! Διαβάστηκαν με επιτυχία {len(recs)} εγγραφές από τα PDF.")
+                st.success(f"✅ Η Δοκιμή πέτυχε! Διαβάστηκαν με επιτυχία {len(recs)} εγγραφές (από {n_checked} ελεγμένα PDF).")
                 
-                st.markdown("### 📊 Τι διάβασε το OCR (Αποτελέσματα Δοκιμής):")
+                st.markdown("### 📊 Τι διάβασε το OCR:")
                 test_df = pd.DataFrame(recs)
                 test_df = test_df.sort_values("net_sales", ascending=False).drop_duplicates("date").sort_values("date", ascending=False)
                 
@@ -486,13 +500,14 @@ with tab_update:
                 if st.button("🔄 Ανανέωση Γραφημάτων", use_container_width=True):
                     st.rerun()
             else:
-                st.warning(f"⚠️ Ελέγχθηκαν {n_checked} αρχεία PDF αλλά δεν μπόρεσε να διαβάσει δεδομένα. Δες αν τα αρχεία είναι σωστά.")
+                st.warning(f"⚠️ Ελέγχθηκαν {n_checked} αρχεία PDF αλλά δεν βρέθηκαν αναφορές πωλήσεων.")
 
     elif run_inc and sales_pw:
-        with st.spinner("Ανάγνωση πρόσφατων email & OCR... (Αυτόματη Επιτάχυνση Ενεργή)"):
+        with st.spinner("Σάρωση πρόσφατων email & OCR... (Αυτόματη Επιτάχυνση)"):
             df_existing = load_cache()
             since_dt = (df_existing["date"].max() - timedelta(days=5)) if not df_existing.empty else None
-            recs, errs, n_checked = fetch(sales_pw, since=since_dt, limit=40)
+            # Αν το ιστορικό είναι άδειο, ψάχνει τις τελευταίες 30 αναφορές πωλήσεων
+            recs, errs, n_checked = fetch(sales_pw, since=since_dt, max_records=30)
             
         if errs:
             st.error(f"❌ Σφάλμα: {errs[0]}")
