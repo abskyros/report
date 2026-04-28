@@ -5,6 +5,7 @@ from datetime import datetime, date, timedelta
 from imap_tools import MailBox, AND
 from pdf2image import convert_from_bytes
 import pytesseract
+from PIL import Image
 
 st.set_page_config(page_title="Πωλήσεις — AB Skyros", page_icon="📊", layout="wide", initial_sidebar_state="collapsed")
 
@@ -139,7 +140,7 @@ def get_week_range(d):
     start = d - timedelta(days=d.weekday())
     return start, start + timedelta(days=6)
 
-# ── OCR ENGINE ────────────────────────────────────────────────────────────────
+# ── OCR ENGINE ΜΕ AUTO-ROTATION ───────────────────────────────────────────────
 def _num(s: str) -> float:
     if not s: return None
     s = s.strip().replace(" ", "").replace("€", "")
@@ -158,41 +159,65 @@ def _num(s: str) -> float:
 def extract(pdf_bytes: bytes) -> dict:
     r = {"date": None, "net_sales": None, "customers": None, "avg_basket": None}
     try:
+        # Μετατροπή PDF σε λίστα εικόνων
         images = convert_from_bytes(pdf_bytes, dpi=200, first_page=1, last_page=3)
-        txt = "\n".join([pytesseract.image_to_string(img, lang="ell+eng", config="--psm 6") for img in images])
 
-        # 1. ΗΜΕΡΟΜΗΝΙΑ
-        date_m = re.search(r'[Ff]or\s*[:\-]?\s*(\d{1,2})[/\.-](\d{1,2})[/\.-](\d{4})', txt)
-        if date_m:
-            try: r["date"] = date(int(date_m.group(3)), int(date_m.group(2)), int(date_m.group(1)))
-            except: pass
+        # Συνάρτηση που επιχειρεί να εξάγει δεδομένα από ένα κείμενο
+        def attempt_extraction(txt):
+            res = {"date": None, "net_sales": None, "customers": None, "avg_basket": None}
+            
+            date_m = re.search(r'[Ff]or\s*[:\-]?\s*(\d{1,2})[/\.-](\d{1,2})[/\.-](\d{4})', txt)
+            if date_m:
+                try: res["date"] = date(int(date_m.group(3)), int(date_m.group(2)), int(date_m.group(1)))
+                except: pass
 
-        # 2. METHOD A: Ψάχνει το Hourly Productivity Totals (εξαιρετικά ακριβές)
-        hourly_m = re.search(r'([\d.,]{4,10})\s+100[.,][0Oo]{2}\s+(\d{2,4})\s+[\d.,]+\s+[\d.,]+\s+[\d.,]+\s+([\d.,]{2,6})\s+\d{2,5}', txt)
-        if hourly_m:
-            ns = _num(hourly_m.group(1))
-            cus = int(hourly_m.group(2))
-            avg = _num(hourly_m.group(3))
-            if ns and avg and 1000 < ns < 50000 and 10 < cus < 2000:
-                r["net_sales"], r["customers"], r["avg_basket"] = ns, cus, avg
+            hourly_m = re.search(r'([\d.,]{4,10})\s+100[.,][0Oo]{2}\s+(\d{2,4})\s+[\d.,]+\s+[\d.,]+\s+[\d.,]+\s+([\d.,]{2,6})\s+\d{2,5}', txt)
+            if hourly_m:
+                ns, cus, avg = _num(hourly_m.group(1)), int(hourly_m.group(2)), _num(hourly_m.group(3))
+                if ns and avg and 1000 < ns < 50000 and 10 < cus < 2000:
+                    res["net_sales"], res["customers"], res["avg_basket"] = ns, cus, avg
 
-        # 3. METHOD B: Ψάχνει το "αποτύπωμα" των 4 αριθμών στο Department Report
-        # Διάταξη: [Τζίρος] \s [Πελάτες-Σκέτο Νούμερο] \s [Καλάθι] \s [Είδη]
-        if r["net_sales"] is None or r["customers"] is None:
-            for m in re.finditer(r'([\d.,]{4,12})\s+(\d{2,4})\s+([\d.,]{2,6})\s+([\d.,]{3,10})', txt):
-                ns = _num(m.group(1))
-                cus = int(m.group(2))
-                avg = _num(m.group(3))
-                if ns and avg and 1000 < ns < 50000 and 10 < cus < 2000 and 5 < avg < 100:
-                    r["net_sales"], r["customers"], r["avg_basket"] = ns, cus, avg
-                    break
+            if res["net_sales"] is None or res["customers"] is None:
+                for m in re.finditer(r'([\d.,]{4,12})\s+(\d{2,4})\s+([\d.,]{2,6})\s+([\d.,]{3,10})', txt):
+                    ns, cus, avg = _num(m.group(1)), int(m.group(2)), _num(m.group(3))
+                    if ns and avg and 1000 < ns < 50000 and 10 < cus < 2000 and 5 < avg < 100:
+                        res["net_sales"], res["customers"], res["avg_basket"] = ns, cus, avg
+                        break
+                        
+            if res["net_sales"] is None:
+                ns_m = re.search(r'NetDay[^\d]{1,15}?([\d.,]{4,10})', txt, re.IGNORECASE)
+                if ns_m: 
+                    ns = _num(ns_m.group(1))
+                    if ns and 1000 < ns < 50000: res["net_sales"] = ns
                     
-        # 4. METHOD C: Fallback μόνο για τον Τζίρο
-        if r["net_sales"] is None:
-            ns_m = re.search(r'NetDay[^\d]{1,15}?([\d.,]{4,10})', txt, re.IGNORECASE)
-            if ns_m: 
-                ns = _num(ns_m.group(1))
-                if ns and 1000 < ns < 50000: r["net_sales"] = ns
+            return res
+
+        # 🔄 AUTO-ROTATION ENGINE
+        # Δοκιμάζει 1: Κανονικά, 2: 270 Μοίρες (Σύνηθες στα Landscape), 3: 90 Μοίρες, 4: Ανάποδα
+        rotations = [None, Image.ROTATE_270, Image.ROTATE_90, Image.ROTATE_180]
+        
+        best_result = r
+        for rot in rotations:
+            txt_parts = []
+            for img in images:
+                if rot is not None:
+                    img_to_ocr = img.transpose(rot)
+                else:
+                    img_to_ocr = img
+                txt_parts.append(pytesseract.image_to_string(img_to_ocr, lang="ell+eng", config="--psm 6"))
+            
+            full_txt = "\n".join(txt_parts)
+            parsed = attempt_extraction(full_txt)
+            
+            # Αν βρει και Ημερομηνία και Τζίρο, σταματάει αμέσως την αναζήτηση!
+            if parsed["date"] is not None and parsed["net_sales"] is not None:
+                return parsed
+                
+            # Κρατάει το καλύτερο αποτέλεσμα σε περίπτωση που δεν βρει κάτι τέλειο
+            if parsed["net_sales"] is not None:
+                best_result = parsed
+                
+        r = best_result
 
     except Exception: pass
     return r
