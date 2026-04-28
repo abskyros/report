@@ -140,7 +140,7 @@ def get_week_range(d):
     start = d - timedelta(days=d.weekday())
     return start, start + timedelta(days=6)
 
-# ── OCR ENGINE ΜΕ KEYWORD + SEQUENCE HUNTER ───────────────────────────────────
+# ── OCR ENGINE ΜΕ KEYWORD + SPEED HUNTER ──────────────────────────────────────
 def _num(s: str) -> float:
     if not s: return None
     s = s.strip().replace(" ", "").replace("€", "")
@@ -159,7 +159,10 @@ def _num(s: str) -> float:
 def extract(pdf_bytes: bytes) -> dict:
     r = {"date": None, "net_sales": None, "customers": None, "avg_basket": None}
     try:
-        images = convert_from_bytes(pdf_bytes, dpi=200, first_page=1, last_page=3)
+        # 🔥 SUPER SPEED: Μετατροπή ΜΟΝΟ της 1ης Σελίδας.
+        images = convert_from_bytes(pdf_bytes, dpi=200, first_page=1, last_page=1)
+        if not images: return r
+        img = images[0]
 
         def attempt_extraction(txt):
             res = {"date": None, "net_sales": None, "customers": None, "avg_basket": None}
@@ -170,31 +173,25 @@ def extract(pdf_bytes: bytes) -> dict:
                 try: res["date"] = date(int(date_m.group(3)), int(date_m.group(2)), int(date_m.group(1)))
                 except: pass
 
-            # --- 2. KEYWORD HUNTER (Η νέα ακριβής στόχευση που ζήτησες) ---
-            # Αφαιρούμε ΟΛΑ τα κενά από το κείμενο και τα κάνουμε κεφαλαία.
-            # Έτσι το "Net Day Sal Dis   9.102" γίνεται "NETDAYSALDIS9.102"
+            # 2. KEYWORD HUNTER (Αφαιρούμε κενά)
             clean_txt = re.sub(r'\s+', '', txt).upper()
             
-            # Πωλήσεις (netdaysaldis)
             ns_m = re.search(r'NETDAYSALDIS[^\d]*([\d.,]{4,12})', clean_txt)
             if ns_m:
                 val = _num(ns_m.group(1))
                 if val and 1000 < val < 50000: res["net_sales"] = val
                 
-            # Πελάτες (numofcus)
             nc_m = re.search(r'NUMOFCUS[^\d]*(\d{2,4})', clean_txt)
             if nc_m:
                 val = int(nc_m.group(1))
                 if 10 < val < 3000: res["customers"] = val
                 
-            # ΜΟ Καλαθιού (avgsalcus)
             ab_m = re.search(r'AVGSALCUS[^\d]*([\d.,]{2,6})', clean_txt)
             if ab_m:
                 val = _num(ab_m.group(1))
                 if val and 5 < val < 150: res["avg_basket"] = val
 
-
-            # --- 3. SEQUENCE HUNTER (Από τον δικό σου κώδικα, ως Backup) ---
+            # 3. SEQUENCE HUNTER (Backup)
             if res["net_sales"] is None or res["customers"] is None or res["avg_basket"] is None:
                 raw_nums = re.findall(r'\b\d+[.,\d]*\b', txt)
                 valid_nums = []
@@ -215,7 +212,6 @@ def extract(pdf_bytes: bytes) -> dict:
                             v3, _ = valid_nums[k]
                             if not (5 < v3 < 150): continue 
                             
-                            # ΒΡΗΚΑΜΕ ΤΗΝ ΑΚΟΛΟΥΘΙΑ - Συμπληρώνουμε μόνο ό,τι λείπει!
                             if res["net_sales"] is None: res["net_sales"] = v1
                             if res["customers"] is None: res["customers"] = int(v2)
                             if res["avg_basket"] is None: res["avg_basket"] = v3
@@ -223,7 +219,7 @@ def extract(pdf_bytes: bytes) -> dict:
                         if res["net_sales"] is not None and res["customers"] is not None: break
                     if res["net_sales"] is not None and res["customers"] is not None: break
 
-            # 4. FALLBACK: Σε περίπτωση που δεν βρει την τριπλέτα
+            # 4. FALLBACK
             if res["net_sales"] is None:
                 ns_m = re.search(r'NETDAY[^\d]{1,15}?([\d.,]{4,10})', clean_txt)
                 if ns_m: 
@@ -232,34 +228,31 @@ def extract(pdf_bytes: bytes) -> dict:
                     
             return res
 
-        # 🔄 AUTO-ROTATION ENGINE & SCORING (Βαθμολογία)
+        # 🔄 AUTO-ROTATION ENGINE (Fast Mode)
         rotations = [None, Image.ROTATE_270, Image.ROTATE_90, Image.ROTATE_180]
         
         best_result = r
         best_score = -1
         
         for rot in rotations:
-            txt_parts = []
-            for img in images:
-                img_to_ocr = img.transpose(rot) if rot is not None else img
-                txt_parts.append(pytesseract.image_to_string(img_to_ocr, lang="ell+eng", config="--psm 6"))
+            img_to_ocr = img.transpose(rot) if rot is not None else img
+            txt = pytesseract.image_to_string(img_to_ocr, lang="ell+eng", config="--psm 6")
+            parsed = attempt_extraction(txt)
             
-            full_txt = "\n".join(txt_parts)
-            parsed = attempt_extraction(full_txt)
-            
-            # --- Υπολογισμός Score ---
             score = 0
-            if parsed["date"] is not None: score += 1
-            if parsed["net_sales"] is not None: score += 1
-            if parsed["customers"] is not None: score += 1
-            if parsed["avg_basket"] is not None: score += 1
+            if parsed["date"]: score += 1
+            if parsed["net_sales"]: score += 2  # Δίνουμε βαρύτητα στον τζίρο
+            if parsed["customers"]: score += 1
+            if parsed["avg_basket"]: score += 1
             
             if score > best_score:
                 best_score = score
                 best_result = parsed
                 
-            # Αν πετύχει το ΤΕΛΕΙΟ 4/4, σταματάει αμέσως (κερδίζουμε χρόνο!)
-            if score == 4:
+            # 🔥 SUPER-SPEED ΟΠΤΙΜΙΖΑΤΙΟΝ: 
+            # Αν βρει Ημερομηνία + Τζίρο (δηλαδή τα βασικά), έχει βρει την ΣΩΣΤΗ ΓΩΝΙΑ.
+            # Σταματάει τον κύκλο αμέσως και κερδίζει τεράστιο χρόνο!
+            if parsed["date"] is not None and parsed["net_sales"] is not None:
                 return best_result
                 
         r = best_result
@@ -444,7 +437,7 @@ with tab_update:
     run_full = col_full.button("🔍 Βαθιά (2 χρόνια)", use_container_width=True)
 
     if run_test and sales_pw:
-        with st.spinner("Ανάγνωση των 10 τελευταίων email & OCR..."):
+        with st.spinner("Ανάγνωση των 10 τελευταίων email & OCR... (Ασφαλής Λειτουργία)"):
             recs, errs, n_checked = fetch(sales_pw, since=None, limit=10)
             
         if errs:
@@ -480,7 +473,7 @@ with tab_update:
                 st.warning(f"⚠️ Ελέγχθηκαν {n_checked} αρχεία PDF αλλά δεν μπόρεσε να διαβάσει δεδομένα. Δες αν τα αρχεία είναι σωστά.")
 
     elif run_inc and sales_pw:
-        with st.spinner("Ανάγνωση πρόσφατων email & OCR..."):
+        with st.spinner("Ανάγνωση πρόσφατων email & OCR... (Αυτόματη Επιτάχυνση Ενεργή)"):
             df_existing = load_cache()
             since_dt = (df_existing["date"].max() - timedelta(days=5)) if not df_existing.empty else None
             recs, errs, n_checked = fetch(sales_pw, since=since_dt, limit=40)
