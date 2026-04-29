@@ -152,114 +152,129 @@ def get_week_range(d):
     start = d - timedelta(days=d.weekday())
     return start, start + timedelta(days=6)
 
-# ── OCR ENGINE MAX-ACCURACY (V3) ──────────────────────────────────────────────
-def _num(s: str) -> float:
+# ── OCR ENGINE v4 — ΣΤΑΘΕΡΗ ΑΝΙΧΝΕΥΣΗ ΧΩΡΙΣ ΕΙΚΑΣΙΕΣ ───────────────────────
+def _num(s: str):
+    """Μετατρέπει ελληνικούς/ευρωπαϊκούς αριθμούς σε float. π.χ. 9.064,56 → 9064.56"""
     if not s: return None
-    s = s.strip().replace(" ", "").replace("€", "")
+    s = s.strip().replace(" ", "").replace("€", "").rstrip(".,")
+    if not s: return None
     if "." in s and "," in s:
+        # Ποια είναι η δεκαδική; Αυτή που εμφανίζεται τελευταία
         if s.rfind(",") > s.rfind("."):
-            s = s.replace(".", "").replace(",", ".")
+            s = s.replace(".", "").replace(",", ".")   # 9.064,56 → 9064.56
         else:
-            s = s.replace(",", "")
+            s = s.replace(",", "")                     # 9,064.56 → 9064.56
     elif "," in s:
-        s = s.replace(",", ".")
+        s = s.replace(",", ".")                        # 9064,56 → 9064.56
     try:
         return float(s)
     except:
         return None
 
+def _ocr_page(img):
+    """
+    Έξυπνο OCR μιας σελίδας.
+    Τα PDFs του AB Σκύρος αποθηκεύονται rotated 90° CCW.
+    Δοκιμάζουμε πρώτα χωρίς περιστροφή — αν δεν βρούμε keywords → 90°.
+    """
+    cfg = "--psm 6 --oem 3"
+    txt = pytesseract.image_to_string(img, lang="ell+eng", config=cfg)
+    if any(k in txt for k in ("NetDay", "TotSal", "Run On", "Totals", "NumOf", "For ")):
+        return txt
+    # Γνωστή περίπτωση: rotated 90° CCW → διορθώνουμε με rotate(90, expand=True)
+    txt90 = pytesseract.image_to_string(img.rotate(90, expand=True), lang="ell+eng", config=cfg)
+    return txt90 if txt90.strip() else txt
+
 def extract(pdf_bytes: bytes) -> dict:
+    """
+    OCR Engine v4 — Χωρίς εικασίες για orientation, με DPI 250.
+
+    Στρατηγική εξαγωγής (κατά προτεραιότητα):
+      1. Hourly Productivity "Totals:" line (σελ. 5-6) — καθαρά δεδομένα σε μία γραμμή
+      2. Department Report keywords: NetDaySalDis, NumOfCus, AvgSalCus (σελ. 1)
+      3. Sequence fallback: ψάχνει τον γνωστό αριθμό τζίρου και παίρνει τους επόμενους
+
+    Ημερομηνία (κατά προτεραιότητα):
+      1. "Run On: DD/MM/YYYY" — η πραγματική ημερομηνία πωλήσεων (footer)
+      2. "For DD/MM/YYYY" ΜΕΙΟΝ 1 ημέρα — fallback (το "For" = επόμενη ημέρα)
+    """
     r = {"date": None, "net_sales": None, "customers": None, "avg_basket": None}
     try:
-        images = convert_from_bytes(pdf_bytes, dpi=200, first_page=1, last_page=2)
+        # DPI 250 για καλύτερη ανάγνωση μικρού κειμένου (Run On, NumOfCus)
+        # Σελίδες 1-6: πιάνουμε Department Report (1) + Hourly Productivity Totals (5-6)
+        images = convert_from_bytes(pdf_bytes, dpi=250, first_page=1, last_page=6)
         if not images: return r
 
-        def attempt_extraction(txt):
-            res = {"date": None, "net_sales": None, "customers": None, "avg_basket": None}
-            date_m = re.search(r'Run\s*[Oo0]n\s*[:\-]?\s*(\d{1,2})[/\.-](\d{1,2})[/\.-](\d{4})', txt, re.IGNORECASE)
-            if date_m:
-                try: res["date"] = date(int(date_m.group(3)), int(date_m.group(2)), int(date_m.group(1)))
+        all_txt = "\n".join(_ocr_page(img) for img in images)
+
+        # ── ΗΜΕΡΟΜΗΝΙΑ ───────────────────────────────────────────────
+        # Primary: "Run On: 26/04/2026" (footer) = η ΠΡΑΓΜΑΤΙΚΗ ημερ. πωλήσεων
+        m = re.search(r'[Rr]un\s*[Oo0]n[:\s]+?(\d{1,2})[/\.-](\d{1,2})[/\.-](\d{4})', all_txt)
+        if m:
+            try: r["date"] = date(int(m.group(3)), int(m.group(2)), int(m.group(1)))
+            except: pass
+
+        # Fallback: "For 27/04/2026" (header) = Run On + 1 → αφαίρεσε 1 μέρα
+        if not r["date"]:
+            m = re.search(r'(?:^|\s)[Ff]or\s+(\d{1,2})[/\.-](\d{1,2})[/\.-](\d{4})', all_txt, re.MULTILINE)
+            if m:
+                try: r["date"] = date(int(m.group(3)), int(m.group(2)), int(m.group(1))) - timedelta(days=1)
                 except: pass
-            if not res["date"]:
-                fallback_m = re.search(r'[Ff][Oo0]r\s*[:\-]?\s*(\d{1,2})[/\.-](\d{1,2})[/\.-](\d{4})', txt)
-                if fallback_m:
-                    try:
-                        f_date = date(int(fallback_m.group(3)), int(fallback_m.group(2)), int(fallback_m.group(1)))
-                        res["date"] = f_date - timedelta(days=1)
-                    except: pass
 
-            totals_m = re.search(r'Totals:\s*([\d.,]{4,10})\s+100[.,]00\s+(\d{2,4})\s+[\d.,]+\s+[\d.,]+\s+[\d.,]+\s+([\d.,]{2,6})', txt, re.IGNORECASE)
-            if totals_m:
-                ns = _num(totals_m.group(1))
-                cus = int(totals_m.group(2))
-                ab = _num(totals_m.group(3))
-                if ns and 1000 < ns < 50000: res["net_sales"] = ns
-                if 10 < cus < 3000: res["customers"] = cus
-                if 5 < ab < 150: res["avg_basket"] = ab
+        # ── ΔΕΔΟΜΕΝΑ: HOURLY PRODUCTIVITY TOTALS (πιο αξιόπιστη πηγή) ──
+        # Γραμμή: "Totals: 8637.79  100.00  336  2.00  4318.90  168.00  25.71  3809"
+        # Θέσεις:  sales    100%    cust  posavg  amt/pos  cust/pos  AVG_BSK  items
+        m = re.search(
+            r'[Tt]otals?\s*:?\s*([\d.,]{4,10})\s+100[.,]00\s+(\d{2,4})'
+            r'\s+[\d.,]+\s+[\d.,]+\s+[\d.,]+\s+([\d.,]{3,7})\s+\d+',
+            all_txt
+        )
+        if m:
+            ns = _num(m.group(1))
+            cus = int(m.group(2))
+            ab  = _num(m.group(3))
+            if ns and 1000 < ns < 80000: r["net_sales"]  = ns
+            if 10 < cus < 3000:          r["customers"]  = cus
+            if ab and 5  < ab  < 200:    r["avg_basket"] = ab
 
-            clean_txt = re.sub(r'\s+', '', txt).upper()
-            if not res["net_sales"]:
-                ns_m = re.search(r'NETDAYSAL[A-Z0-9]*[^\d]*([\d.,]{4,12})', clean_txt)
-                if ns_m:
-                    val = _num(ns_m.group(1).rstrip('.,'))
-                    if val and 1000 < val < 50000: res["net_sales"] = val
-                if not res["net_sales"]:
-                    ns_m2 = re.search(r'NETDAY[^\d]{1,15}?([\d.,]{4,10})', clean_txt)
-                    if ns_m2: 
-                        ns = _num(ns_m2.group(1).rstrip('.,'))
-                        if ns and 1000 < ns < 50000: res["net_sales"] = ns
+        # ── ΔΕΔΟΜΕΝΑ: DEPARTMENT REPORT KEYWORDS (backup) ────────────
+        clean = re.sub(r'\s+', '', all_txt).upper()
 
-            if res["net_sales"] is not None and (res["customers"] is None or res["avg_basket"] is None):
-                ns_val = res["net_sales"]
-                s1 = f"{ns_val:,.2f}".replace(',', 'X').replace('.', ',').replace('X', r'\.') 
-                s2 = f"{ns_val:.2f}".replace('.', r'\.')
-                pattern = r'(' + s1 + r'|' + s2 + r')(\d{2,4})(\d{1,3}[,.]\d{2})'
-                matches = re.findall(pattern, clean_txt)
-                for m in matches:
-                    c_val = int(m[1])
-                    ab_val = _num(m[2])
-                    if 10 < c_val < 3000 and 5 < ab_val < 150:
-                        if res["customers"] is None: res["customers"] = c_val
-                        if res["avg_basket"] is None: res["avg_basket"] = ab_val
-                        break
-                        
-            if res["net_sales"] is not None and (res["customers"] is None or res["avg_basket"] is None):
-                raw_nums = re.findall(r'\d+[.,\d]*', txt)
-                valid_nums = [_num(rn.rstrip('.,')) for rn in raw_nums if _num(rn.rstrip('.,')) is not None]
-                for i, val in enumerate(valid_nums):
-                    if val == res["net_sales"]:
-                        tc, ta = None, None
-                        for j in range(i + 1, min(i + 10, len(valid_nums))):
-                            nxt = valid_nums[j]
-                            if tc is None and 10 < nxt < 3000 and nxt.is_integer(): tc = int(nxt)
-                            elif tc is not None and ta is None and 5 < nxt < 150:
-                                ta = nxt
-                                break
-                        if tc and not res["customers"]: res["customers"] = tc
-                        if ta and not res["avg_basket"]: res["avg_basket"] = ta
-                        break
-            return res
+        if not r["net_sales"]:
+            m = re.search(r'NETDAYSAL[A-Z0-9]{0,5}[^\d]*([\d.,]{4,12})', clean)
+            if m:
+                val = _num(m.group(1))
+                if val and 1000 < val < 80000: r["net_sales"] = val
 
-        rotations = [None, Image.ROTATE_270, Image.ROTATE_90, Image.ROTATE_180]
-        best_result = r
-        best_score = -1
-        
-        for rot in rotations:
-            txt = ""
-            for img in images:
-                img_to_ocr = img.transpose(rot) if rot is not None else img
-                txt += pytesseract.image_to_string(img_to_ocr, lang="ell+eng", config="--psm 6") + "\n"
-                
-            parsed = attempt_extraction(txt)
-            score = (1 if parsed["date"] else 0) + (2 if parsed["net_sales"] else 0) + (1 if parsed["customers"] else 0) + (1 if parsed["avg_basket"] else 0)
-            
-            if score > best_score:
-                best_score = score
-                best_result = parsed
-            if best_score >= 5:
-                return best_result
-                
-        r = best_result
+        if not r["customers"]:
+            m = re.search(r'NUMOFCUS[^\d]*(\d{2,4})', clean)
+            if m:
+                val = int(m.group(1))
+                if 10 < val < 3000: r["customers"] = val
+
+        if not r["avg_basket"]:
+            m = re.search(r'AVGSALCUS[^\d]*([\d.,]{3,7})', clean)
+            if m:
+                val = _num(m.group(1))
+                if val and 5 < val < 200: r["avg_basket"] = val
+
+        # ── SEQUENCE FALLBACK (τελευταία επιλογή) ────────────────────
+        # Αν ξέρουμε τον τζίρο, ψάχνουμε τους επόμενους αριθμούς
+        if r["net_sales"] and (not r["customers"] or not r["avg_basket"]):
+            nums = []
+            for x in re.findall(r'\d+[.,\d]*', all_txt):
+                v = _num(x)
+                if v is not None: nums.append(v)
+            for i, v in enumerate(nums):
+                if abs(v - r["net_sales"]) < 0.02:
+                    for j in range(i+1, min(i+15, len(nums))):
+                        nv = nums[j]
+                        if not r["customers"] and 10 < nv < 3000 and float(nv).is_integer():
+                            r["customers"] = int(nv)
+                        elif r["customers"] and not r["avg_basket"] and 5 < nv < 200:
+                            r["avg_basket"] = nv; break
+                    break
+
     except Exception: pass
     return r
 
@@ -285,36 +300,60 @@ def fetch_smart(pw, date_start=None, date_end=None, max_to_find=30, msg_limit=20
     return recs, n_checked
 
 def repair_bad_records(pw, info_box):
+    """
+    Επιδιόρθωση εγγραφών με ελλείψεις.
+    Χρησιμοποιεί ΜΙΑ σύνδεση IMAP και κάνει batch processing
+    για όλες τις προβληματικές ημερομηνίες μαζί.
+    """
     df = load_all()
     if df.empty: return 0, 0
-    
-    bad_mask = (df['customers'].isna() | df['avg_basket'].isna() | 
-                (df['customers'] < 10) | (df['avg_basket'] < 5))
-    bad_dates = df[bad_mask]['date'].tolist()
-    
+
+    bad_mask = (
+        df['customers'].isna() | df['avg_basket'].isna() |
+        (df['customers'] < 10)  | (df['avg_basket'] < 5)
+    )
+    bad_dates = set(df[bad_mask]['date'].tolist())
     if not bad_dates: return 0, 0
-        
-    fixed_count = 0
+
+    total_bad = len(bad_dates)
+    info_box.info(f"🔍 Βρέθηκαν {total_bad} ημέρες με ελλείψεις — Ξεκινώ επιδιόρθωση...")
+    fixed_recs = []
+
     try:
         with MailBox("imap.gmail.com").login(SALES_EMAIL_USER, pw) as mb:
-            for b_date in bad_dates:
-                info_box.info(f"🔍 Επιδιόρθωση: Σάρωση email για την ημερομηνία **{b_date.strftime('%d/%m/%Y')}**...")
-                d_start = b_date
-                d_end = b_date + timedelta(days=3)
-                criteria = AND(from_=SALES_EMAIL_SENDER, date_gte=d_start, date_lt=d_end)
-                
-                for msg in mb.fetch(criteria, limit=5):
-                    if not _is_valid(msg.subject): continue
-                    pdf = next((a for a in msg.attachments if a.filename and a.filename.lower().endswith(".pdf")), None)
-                    if not pdf: continue
-                    
-                    rec = extract(pdf.payload)
-                    if rec["date"] == b_date and rec["customers"] is not None and rec["avg_basket"] is not None:
-                        fixed_count += merge_in([rec])
-                        break 
-    except: pass
-    
-    return len(bad_dates), fixed_count
+            # Φέρε ΟΛΕΣ τις αναφορές πωλήσεων του χρονικού εύρους με ΜΙΑ αναζήτηση
+            date_min = min(bad_dates)
+            date_max = max(bad_dates) + timedelta(days=3)
+            criteria = AND(from_=SALES_EMAIL_SENDER, date_gte=date_min, date_lt=date_max)
+
+            msgs = list(mb.fetch(criteria, mark_seen=False, limit=300))
+            info_box.info(f"📬 Βρέθηκαν {len(msgs)} email στο εύρος — Επεξεργασία OCR...")
+
+            for i, msg in enumerate(msgs):
+                if not _is_valid(msg.subject): continue
+                pdf = next((a for a in msg.attachments
+                            if a.filename and a.filename.lower().endswith(".pdf")), None)
+                if not pdf: continue
+
+                rec = extract(pdf.payload)
+                if rec["date"] and rec["date"] in bad_dates and rec["net_sales"]:
+                    fixed_recs.append(rec)
+                    bad_dates.discard(rec["date"])
+
+                # Progress update κάθε 5 email
+                if (i + 1) % 5 == 0:
+                    info_box.info(
+                        f"⚙️ Επεξεργάζομαι {i+1}/{len(msgs)} email... "
+                        f"| Επιδιορθώθηκαν: {total_bad - len(bad_dates)}/{total_bad}"
+                    )
+                if not bad_dates:  # Τελειώσαμε νωρίτερα!
+                    break
+
+    except Exception as e:
+        info_box.warning(f"⚠️ Σφάλμα κατά την επιδιόρθωση: {e}")
+
+    fixed_count = merge_in(fixed_recs)
+    return total_bad, fixed_count
 
 def _is_valid(subj):
     s = (subj or "").upper()
@@ -324,21 +363,33 @@ def _is_valid(subj):
 df_all = load_all()
 today = date.today()
 
-# ── ΑΥΤΟΜΑΤΗ ΕΝΗΜΕΡΩΣΗ ΣΤΟ ΠΑΡΑΣΚΗΝΙΟ (AUTO-SYNC) ─────────────────────────────
-if "sales_auto_sync" not in st.session_state:
-    st.session_state.sales_auto_sync = False
+# ── ΑΥΤΟΜΑΤΗ ΕΝΗΜΕΡΩΣΗ — ΠΟΤΕ ΔΕΝ ΚΟΙΜΑΤΑΙ (TIMESTAMP-BASED) ──────────────
+# Τρέχει αυτόματα κάθε AUTO_SYNC_MINS λεπτά χωρίς να χρειάζεται action από τον χρήστη.
+# Το JS meta-refresh κρατά τη σελίδα ζωντανή ακόμα και χωρίς αλληλεπίδραση.
+AUTO_SYNC_MINS = 25  # Κάθε 25 λεπτά φέρνει νέα δεδομένα
 
-if not st.session_state.sales_auto_sync and _SECRET_PW and not df_all.empty:
-    max_dt = df_all["date"].max()
-    # Έλεγχος αν λείπει η σημερινή μέρα (ή και πιο παλιές)
-    if max_dt < today:
-        with st.spinner("🔄 Αυτόματος συγχρονισμός νέων πωλήσεων (Σημερινά Δεδομένα)..."):
-            # Ψάχνει από την τελευταία μέρα που έχεις στη βάση και μετά
-            recs, n = fetch_smart(_SECRET_PW, date_start=max_dt, max_to_find=5, msg_limit=30)
-            if recs:
-                merge_in(recs)
-                df_all = load_all()
-    st.session_state.sales_auto_sync = True
+import streamlit.components.v1 as components
+# JS: Επαναφόρτωση σελίδας κάθε AUTO_SYNC_MINS λεπτά → ενεργοποιεί ξανά το auto-sync
+components.html(
+    f'<script>setTimeout(()=>{{window.parent.location.reload();}},{AUTO_SYNC_MINS*60*1000});</script>',
+    height=0,
+)
+
+now_ts = time.time()
+if "last_sync_ts" not in st.session_state:
+    st.session_state.last_sync_ts = 0
+
+# Εκτέλεση αν πέρασαν AUTO_SYNC_MINS από την τελευταία συγχρονισμό
+if _SECRET_PW and (now_ts - st.session_state.last_sync_ts > AUTO_SYNC_MINS * 60):
+    st.session_state.last_sync_ts = now_ts
+    _since = df_all["date"].max() if not df_all.empty else None
+    try:
+        _recs, _ = fetch_smart(_SECRET_PW, date_start=_since, max_to_find=5, msg_limit=30)
+        if _recs:
+            merge_in(_recs)
+            df_all = load_all()
+    except Exception:
+        pass  # Σιωπηλή αποτυχία — δεν σπάμε το UI
 
 
 # ── RENDER ────────────────────────────────────────────────────────────────────
