@@ -197,6 +197,48 @@ def get_week_range(d):
 df  = load_all()
 today = date.today()
 
+# ── ΑΥΤΟΜΑΤΗ ΕΝΗΜΕΡΩΣΗ ΤΙΜΟΛΟΓΙΩΝ — ΠΟΤΕ ΔΕΝ ΚΟΙΜΑΤΑΙ ──────────────────────
+# BUG FIX: Πριν δεν υπήρχε καθόλου auto-sync → άδεια σελίδα κάθε φορά.
+# Τώρα: τρέχει αυτόματα κάθε INV_SYNC_MINS, ακόμα και αν cache=empty.
+
+import streamlit.components.v1 as _inv_components
+import time as _time
+
+INV_SYNC_MINS = 30
+
+# JS auto-reload κάθε 30 λεπτά
+_inv_components.html(
+    f'<script>setTimeout(()=>{{window.parent.location.reload();}},{INV_SYNC_MINS*60*1000});</script>',
+    height=0,
+)
+
+_inv_now = _time.time()
+if "inv_last_sync_ts" not in st.session_state:
+    st.session_state.inv_last_sync_ts = 0
+
+_inv_sync_needed = (
+    _SECRET_PW and
+    (_inv_now - st.session_state.inv_last_sync_ts > INV_SYNC_MINS * 60)
+)
+
+if _inv_sync_needed:
+    st.session_state.inv_last_sync_ts = _inv_now
+    try:
+        # full_scan=True αν cache άδειο, incremental αν έχουμε ιστορικό
+        _inv_full = df.empty
+        _inv_rows, _inv_errs, _ = fetch_invoices_incremental(_SECRET_PW, full_scan=_inv_full)
+        if _inv_rows:
+            _inv_new = pd.concat(_inv_rows, ignore_index=True)
+            _inv_old = load_all()
+            _inv_merged = (pd.concat([_inv_old, _inv_new])
+                           .drop_duplicates(subset=["DATE","TYPE","VALUE"])
+                           .sort_values("DATE", ascending=False)
+                           .reset_index(drop=True))
+            save_and_archive(_inv_merged)
+            df = load_all()
+    except Exception:
+        pass  # Σιωπηλή αποτυχία — δεν σπάμε το UI
+
 # ── RENDER ────────────────────────────────────────────────────────────────────
 
 

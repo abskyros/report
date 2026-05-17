@@ -129,13 +129,19 @@ def merge_in(recs: list) -> int:
             old_row = old.iloc[idx]
             needs_update = False
             
-            if (pd.isna(old_row['customers']) or old_row['customers'] < 10) and not pd.isna(r['customers']) and r['customers'] > 0:
-                old.at[idx, 'customers'] = r['customers']
-                needs_update = True
-            
-            if (pd.isna(old_row['avg_basket']) or old_row['avg_basket'] < 5) and not pd.isna(r['avg_basket']) and r['avg_basket'] > 0:
-                old.at[idx, 'avg_basket'] = r['avg_basket']
-                needs_update = True
+            # Smart update: διορθώνει παλιές εγγραφές με λάθος OCR
+            # π.χ. customers=32 (παλιό OCR) vs 317 (νέο OCR) → ratio=9.9x → update
+            _new_c = r['customers']; _old_c = old_row['customers']
+            if not pd.isna(_new_c) and _new_c > 0:
+                if (pd.isna(_old_c) or _old_c < 10 or
+                        (_old_c > 0 and (_new_c/_old_c > 2.5 or _new_c/_old_c < 0.4))):
+                    old.at[idx, 'customers'] = _new_c; needs_update = True
+
+            _new_a = r['avg_basket']; _old_a = old_row['avg_basket']
+            if not pd.isna(_new_a) and _new_a > 0:
+                if (pd.isna(_old_a) or _old_a < 5 or
+                        (_old_a > 0 and (_new_a/_old_a > 2.5 or _new_a/_old_a < 0.4))):
+                    old.at[idx, 'avg_basket'] = _new_a; needs_update = True
                 
             if r['net_sales'] and (pd.isna(old_row['net_sales']) or r['net_sales'] > old_row['net_sales']):
                 old.at[idx, 'net_sales'] = r['net_sales']
@@ -171,14 +177,19 @@ def parse_text_robust(txt: str) -> dict:
     res = {"date": None, "net_sales": None, "customers": None, "avg_basket": None}
     
     # 1. ΒΡΙΣΚΟΥΜΕ ΤΗΝ ΠΡΑΓΜΑΤΙΚΗ ΗΜΕΡΟΜΗΝΙΑ
-    date_m = re.search(r'[Ff][Oo0]r\s*[:\-]?\s*(\d{1,2})[/\.-](\d{1,2})[/\.-](\d{4})', txt)
-    if date_m:
-        try: res["date"] = date(int(date_m.group(3)), int(date_m.group(2)), int(date_m.group(1)))
+    # ΚΑΝΟΝΑΣ: "Run On: 27/04/2026" = η ΣΩΣΤΗ ημέρα πωλήσεων (πρωταρχική πηγή)
+    #           "For 28/04/2026"     = Run On + 1 (ΛΑΘΟΣ αν χρησιμοποιηθεί άμεσα)
+    # BUG FIX: [Rr]?[Uu]n πιάνει "un On" όταν το OCR κόβει το "R" στην άκρη
+    # BUG FIX: [;:\s]+ πιάνει "Run On;" (OCR γράφει ";" αντί ":")
+    run_m = re.search(r'[Rr]?[Uu]n\s*[Oo0]n\s*[;:\s]+?(\d{1,2})[/\.-](\d{1,2})[/\.-](\d{4})', txt, re.IGNORECASE)
+    if run_m:
+        try: res["date"] = date(int(run_m.group(3)), int(run_m.group(2)), int(run_m.group(1)))
         except: pass
+    # Fallback: "For 28/04/2026" → αφαίρεσε 1 μέρα → 27/04/2026
     if not res["date"]:
-        fallback_m = re.search(r'Run\s*[Oo0]n\s*[:\-]?\s*(\d{1,2})[/\.-](\d{1,2})[/\.-](\d{4})', txt, re.IGNORECASE)
-        if fallback_m:
-            try: res["date"] = date(int(fallback_m.group(3)), int(fallback_m.group(2)), int(fallback_m.group(1))) - timedelta(days=1)
+        for_m = re.search(r'(?:^|\s)[Ff][Oo0]r\s+(\d{1,2})[/\.-](\d{1,2})[/\.-](\d{4})', txt, re.MULTILINE)
+        if for_m:
+            try: res["date"] = date(int(for_m.group(3)), int(for_m.group(2)), int(for_m.group(1))) - timedelta(days=1)
             except: pass
 
     # 2. ΤΑΚΤΙΚΗ A: ΑΚΡΙΒΗΣ ΓΡΑΜΜΗ "Totals:"
@@ -226,51 +237,39 @@ def parse_text_robust(txt: str) -> dict:
 
     return res
 
+def _ocr_page(img):
+    """
+    Smart OCR μιας σελίδας.
+    Τα PDFs του AB Σκύρος αποθηκεύονται rotated 90° CCW.
+    Δοκιμάζουμε πρώτα χωρίς → αν δεν βρούμε keywords → rotate 90°.
+    Αποφεύγουμε 4 passes ανά σελίδα (παλιό) → μέγιστο 2 passes.
+    """
+    cfg = "--psm 6 --oem 3"
+    t = pytesseract.image_to_string(img, lang="ell+eng", config=cfg)
+    if any(k in t for k in ("NetDay","TotSal","Run On","un On","Totals","NumOf","For ")):
+        return t
+    # Γνωστή περίπτωση: rotated 90° CCW
+    return pytesseract.image_to_string(img.rotate(90, expand=True), lang="ell+eng", config=cfg)
+
+
 def extract(pdf_bytes: bytes) -> dict:
-    """Υβριδική συνάρτηση: Δοκιμάζει Native PDF ανάγνωση και αν αποτύχει γυρίζει σε OCR."""
+    """
+    OCR Engine v4 — Σταθερή ανίχνευση.
+
+    • DPI 250 (καλύτερη ανάγνωση footer/μικρού κειμένου)
+    • Σελίδες 1-6 (πιάνει Dept Report σελ.1 + Hourly Productivity Totals σελ.5-6)
+    • Smart rotation: max 2 passes ανά σελίδα (vs παλιό 4x)
+    • Χωρίς native PDF attempt (image PDFs πάντα αποτυγχάνουν, χάσιμο χρόνου)
+    """
     r = {"date": None, "net_sales": None, "customers": None, "avg_basket": None}
-    
-    # ΠΡΟΣΠΑΘΕΙΑ 1: Διάβασμα απευθείας από το PDF (Native - 100% Ακρίβεια)
     try:
-        import PyPDF2
-        reader = PyPDF2.PdfReader(io.BytesIO(pdf_bytes))
-        txt = ""
-        for page in reader.pages:
-            txt += page.extract_text() + "\n"
-        parsed = parse_text_robust(txt)
-        if parsed["date"] and parsed["net_sales"] and parsed["customers"]:
-            return parsed
-    except:
-        pass
-        
-    # ΠΡΟΣΠΑΘΕΙΑ 2: OCR με πολλαπλές ρυθμίσεις (Για Image PDFs)
-    try:
-        images = convert_from_bytes(pdf_bytes, dpi=250, first_page=1, last_page=2)
+        images = convert_from_bytes(pdf_bytes, dpi=250, first_page=1, last_page=6)
         if not images: return r
-        
-        best_result = r
-        best_score = -1
-        
-        for rot in [None, Image.ROTATE_270]:
-            txt = ""
-            for img in images:
-                img_to_ocr = img.transpose(rot) if rot is not None else img
-                # Σκανάρει με 2 τρόπους για να σπάσει τις κολλημένες γραμμές
-                txt += pytesseract.image_to_string(img_to_ocr, lang="ell+eng", config="--psm 6") + "\n"
-                txt += pytesseract.image_to_string(img_to_ocr, lang="ell+eng", config="--psm 4") + "\n"
-                
-            parsed = parse_text_robust(txt)
-            score = (1 if parsed["date"] else 0) + (2 if parsed["net_sales"] else 0) + (1 if parsed["customers"] else 0) + (1 if parsed["avg_basket"] else 0)
-            
-            if score > best_score:
-                best_score = score
-                best_result = parsed
-            if best_score >= 5: # Το τέλειο σκορ
-                return best_result
-                
-        r = best_result
-    except Exception: pass
-    
+
+        all_txt = "\n".join(_ocr_page(img) for img in images)
+        r = parse_text_robust(all_txt)
+    except Exception:
+        pass
     return r
 
 # ── ΕΞΥΠΝΟ FETCHING ───────────────────────────────────────────────────────────
@@ -334,19 +333,41 @@ def _is_valid(subj):
 df_all = load_all()
 today = date.today()
 
-# ── ΑΥΤΟΜΑΤΗ ΕΝΗΜΕΡΩΣΗ ΣΤΟ ΠΑΡΑΣΚΗΝΙΟ (AUTO-SYNC) ─────────────────────────────
-if "sales_auto_sync" not in st.session_state:
-    st.session_state.sales_auto_sync = False
+# ── ΑΥΤΟΜΑΤΗ ΕΝΗΜΕΡΩΣΗ — ΠΟΤΕ ΔΕΝ ΚΟΙΜΑΤΑΙ ────────────────────────────────────
+# Τρέχει αυτόματα κάθε AUTO_SYNC_MINS.
+# BUG FIX: αφαιρέθηκε το "not df_all.empty" — τρέχει ΠΑΝΤΑ, ακόμα και αν το
+# cache είναι άδειο (π.χ. μετά από Streamlit Cloud redeploy).
 
-if not st.session_state.sales_auto_sync and _SECRET_PW and not df_all.empty:
-    max_dt = df_all["date"].max()
-    if max_dt < today:
-        with st.spinner("🔄 Αυτόματος συγχρονισμός νέων πωλήσεων (Σημερινά Δεδομένα)..."):
-            recs, n = fetch_smart(_SECRET_PW, date_start=max_dt, max_to_find=5, msg_limit=30)
-            if recs:
-                merge_in(recs)
-                df_all = load_all()
-    st.session_state.sales_auto_sync = True
+import streamlit.components.v1 as _components
+AUTO_SYNC_MINS = 25
+
+# JS auto-reload κάθε AUTO_SYNC_MINS → κρατά τη σελίδα πάντα ενημερωμένη
+_components.html(
+    f'<script>setTimeout(()=>{{window.parent.location.reload();}},{AUTO_SYNC_MINS*60*1000});</script>',
+    height=0,
+)
+
+_now_ts = time.time()
+if "sales_last_sync_ts" not in st.session_state:
+    st.session_state.sales_last_sync_ts = 0
+
+_sync_needed = (
+    _SECRET_PW and
+    (_now_ts - st.session_state.sales_last_sync_ts > AUTO_SYNC_MINS * 60)
+)
+
+if _sync_needed:
+    st.session_state.sales_last_sync_ts = _now_ts
+    if df_all.empty:
+        # Cache άδειο (redeploy ή πρώτη φόρτωση) → φέρε τις τελευταίες 35 μέρες
+        _recs, _ = fetch_smart(_SECRET_PW, max_to_find=35, msg_limit=150)
+    else:
+        # Incremental: από την τελευταία γνωστή ημέρα
+        _since = df_all["date"].max() - timedelta(days=2)
+        _recs, _ = fetch_smart(_SECRET_PW, date_start=_since, max_to_find=5, msg_limit=30)
+    if _recs:
+        merge_in(_recs)
+        df_all = load_all()
 
 
 # ── RENDER ────────────────────────────────────────────────────────────────────
