@@ -33,9 +33,12 @@ INVOICES_SHEET = "invoices"
 
 @st.cache_resource
 def _client():
-    creds = Credentials.from_service_account_info(
-        dict(st.secrets["gcp_service_account"]), scopes=SCOPES
-    )
+    info = dict(st.secrets["gcp_service_account"])
+    # Streamlit secrets αποθηκεύει το private_key με literal \n αντί για αλλαγές γραμμής.
+    # Το Google SDK χρειάζεται πραγματικές αλλαγές γραμμής για να φορτώσει το PEM.
+    if "private_key" in info:
+        info["private_key"] = info["private_key"].replace("\\n", "\n")
+    creds = Credentials.from_service_account_info(info, scopes=SCOPES)
     return gspread.authorize(creds)
 
 
