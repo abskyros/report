@@ -1,19 +1,19 @@
 import streamlit as st
 import pandas as pd
-import io, os
+import io
 from datetime import datetime, date, timedelta
 from imap_tools import MailBox, AND
 
 st.set_page_config(page_title="Τιμολόγια — AB Σκύρος", page_icon="📄", layout="wide", initial_sidebar_state="collapsed")
 
+from gsheets_helper import load_invoices, merge_invoices
+
 # ── CONFIG ────────────────────────────────────────────────────────────────────
 INV_EMAIL_USER   = "abf.skyros@gmail.com"
 INV_EMAIL_SENDER = "Notifications@WeDoConnect.com"
-INV_CACHE        = "invoices_cache.csv"
-INV_ARCHIVE      = "invoices_archive.csv"
 DEEP_SCAN_YEARS  = 2
 
-# ── SECRETS ──────────────────────────────────────────────────────────────────
+# ── SECRETS ───────────────────────────────────────────────────────────────────
 _SECRET_PW = ""
 try:
     _SECRET_PW = st.secrets.get("EMAIL_PASS", "")
@@ -23,36 +23,37 @@ except:
 # ── CSS ───────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 *{box-sizing:border-box;margin:0;padding:0;}
-html,body,[class*="css"]{font-family:'Inter',sans-serif!important;background:#f8f9fb!important;color:#111827!important;}
-.stApp{background:#f8f9fb!important;}
+html,body,[class*="css"]{font-family:'Inter',sans-serif!important;background:#e8f4fb!important;color:#0f172a!important;}
+.stApp{background:#e8f4fb!important;}
 section[data-testid="stSidebar"]{display:none!important;}
 #MainMenu,footer,header{visibility:hidden!important;}
 .block-container{padding:1.5rem 1.5rem 4rem!important;max-width:960px!important;margin:0 auto!important;}
-.topbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:1.5rem;padding-bottom:1rem;border-bottom:1px solid #e5e7eb;}
-.ptitle{font-size:1.3rem;font-weight:700;color:#111827;}
-.sh{font-size:.58rem;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:#9ca3af;margin:1.8rem 0 .7rem;border-bottom:1px solid #f3f4f6;padding-bottom:.4rem;}
+.topbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:1.5rem;padding-bottom:1rem;border-bottom:2px solid #bae6fd;}
+.ptitle{font-size:1.25rem;font-weight:800;color:#003d6b;}
+.sh{font-size:.58rem;font-weight:700;letter-spacing:.18em;text-transform:uppercase;color:#0369a1;margin:1.8rem 0 .7rem;border-bottom:1px solid #e0f2fe;padding-bottom:.4rem;}
 .kr{display:grid;gap:.75rem;margin:.5rem 0 1.2rem;}
 .kr4{grid-template-columns:repeat(4,1fr);}
 .kr3{grid-template-columns:repeat(3,1fr);}
 @media(max-width:900px){.kr4{grid-template-columns:repeat(2,1fr);}}
 @media(max-width:580px){.kr4,.kr3{grid-template-columns:1fr;}.block-container{padding:1rem 1rem 3rem!important;}}
-.kc{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:.9rem 1rem;position:relative;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.04);}
-.kc::before{content:'';position:absolute;top:0;left:0;bottom:0;width:3px;background:var(--a,#3b82f6);}
-.kl{font-size:.58rem;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:#9ca3af;margin-bottom:.3rem;}
-.kv{font-size:1.1rem;font-weight:700;color:#111827;}
-.kv-green{color:#059669;}
+.kc{background:#fff;border:1px solid #e0f2fe;border-radius:12px;padding:.9rem 1rem;position:relative;overflow:hidden;box-shadow:0 2px 8px rgba(0,61,107,0.06);}
+.kc::before{content:'';position:absolute;top:0;left:0;bottom:0;width:3px;background:var(--a,#003d6b);}
+.kl{font-size:.58rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#64748b;margin-bottom:.3rem;}
+.kv{font-size:1.1rem;font-weight:800;color:#0f172a;}
+.kv-green{color:#0369a1;}
 .kv-red{color:#dc2626;}
-.stButton>button{border-radius:9px!important;font-family:'Inter',sans-serif!important;font-size:.82rem!important;font-weight:600!important;padding:.6rem 1rem!important;transition:all .15s!important;}
-.btn-b>button{background:#3b82f6!important;border:none!important;color:#fff!important;}
-.btn-b>button:hover{opacity:.88!important;}
-.btn-back>button{background:#fff!important;border:1px solid #d1d5db!important;color:#374151!important;}
-[data-baseweb="tab-list"]{background:transparent!important;border-bottom:1px solid #e5e7eb!important;gap:.2rem!important;}
-[data-baseweb="tab"]{background:transparent!important;border:none!important;color:#6b7280!important;font-size:.74rem!important;font-weight:600!important;letter-spacing:.05em!important;text-transform:uppercase!important;padding:.5rem .9rem!important;border-radius:8px 8px 0 0!important;}
-[aria-selected="true"][data-baseweb="tab"]{color:#3b82f6!important;background:#eff6ff!important;border-bottom:2px solid #3b82f6!important;}
-[data-testid="stDataFrame"]{border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;}
-.info-box{background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:.8rem 1rem;font-size:.73rem;color:#1d4ed8;margin:.6rem 0;}
+.stButton>button{border-radius:9px!important;font-family:'Inter',sans-serif!important;font-size:.82rem!important;font-weight:700!important;padding:.6rem 1rem!important;transition:all .15s!important;}
+.btn-b>button{background:#003d6b!important;border:none!important;color:#fff!important;}
+.btn-b>button:hover{background:#004f8a!important;}
+.btn-back>button{background:#fff!important;border:1px solid #bae6fd!important;color:#003d6b!important;font-weight:700!important;}
+.btn-back>button:hover{background:#e0f2fe!important;}
+[data-baseweb="tab-list"]{background:transparent!important;border-bottom:1px solid #bae6fd!important;gap:.2rem!important;}
+[data-baseweb="tab"]{background:transparent!important;border:none!important;color:#64748b!important;font-size:.74rem!important;font-weight:700!important;letter-spacing:.05em!important;text-transform:uppercase!important;padding:.5rem .9rem!important;border-radius:8px 8px 0 0!important;}
+[aria-selected="true"][data-baseweb="tab"]{color:#003d6b!important;background:#e0f2fe!important;border-bottom:2px solid #003d6b!important;}
+[data-testid="stDataFrame"]{border:1px solid #bae6fd;border-radius:10px;overflow:hidden;}
+.info-box{background:#e0f2fe;border:1px solid #bae6fd;border-radius:10px;padding:.8rem 1rem;font-size:.73rem;color:#0369a1;margin:.6rem 0;}
 .warn-box{background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:.8rem 1rem;font-size:.73rem;color:#92400e;margin:.6rem 0;}
 </style>
 """, unsafe_allow_html=True)
@@ -63,39 +64,6 @@ MONTHS_GR = ["Ιαν","Φεβ","Μαρ","Απρ","Μαι","Ιουν","Ιουλ",
 def fmt(v):
     if v is None or (isinstance(v, float) and pd.isna(v)): return "—"
     return f"{v:,.2f}€".replace(",","X").replace(".",",").replace("X",".")
-
-def load_cache():
-    if os.path.exists(INV_CACHE):
-        df = pd.read_csv(INV_CACHE)
-        if not df.empty: df["DATE"] = pd.to_datetime(df["DATE"])
-        return df
-    return pd.DataFrame(columns=["DATE","TYPE","VALUE"])
-
-def load_all():
-    parts = []
-    for f in [INV_CACHE, INV_ARCHIVE]:
-        if os.path.exists(f):
-            df = pd.read_csv(f)
-            if not df.empty:
-                df["DATE"] = pd.to_datetime(df["DATE"])
-                parts.append(df)
-    if parts:
-        combined = pd.concat(parts)
-        combined = combined.drop_duplicates(subset=["DATE","TYPE","VALUE"])
-        return combined.sort_values("DATE", ascending=False).reset_index(drop=True)
-    return pd.DataFrame(columns=["DATE","TYPE","VALUE"])
-
-def save_and_archive(df_all):
-    cutoff = datetime.now() - timedelta(days=365*DEEP_SCAN_YEARS)
-    recent = df_all[df_all["DATE"] >= cutoff].copy()
-    old    = df_all[df_all["DATE"]  < cutoff].copy()
-    recent.to_csv(INV_CACHE, index=False)
-    if not old.empty:
-        if os.path.exists(INV_ARCHIVE):
-            existing = pd.read_csv(INV_ARCHIVE)
-            existing["DATE"] = pd.to_datetime(existing["DATE"])
-            old = pd.concat([existing, old]).drop_duplicates(subset=["DATE","TYPE","VALUE"])
-        old.to_csv(INV_ARCHIVE, index=False)
 
 def find_header_and_load(file_content, filename):
     try:
@@ -113,8 +81,7 @@ def find_header_and_load(file_content, filename):
             row_values = [str(x).upper() for x in df_raw.iloc[i].values if pd.notna(x)]
             row_str = " ".join(row_values)
             if "ΤΥΠΟΣ" in row_str and "ΗΜΕΡΟΜΗΝΙΑ" in row_str:
-                header_row_index = i
-                break
+                header_row_index = i; break
 
         if header_row_index == -1: return None
 
@@ -128,16 +95,15 @@ def find_header_and_load(file_content, filename):
         return None
 
 def fetch_invoices_incremental(password, full_scan=False):
-    """Smart incremental fetch για τιμολόγια"""
-    df_existing = load_cache()
+    df_existing = load_invoices()
     cutoff_dt   = None
 
     if not full_scan and not df_existing.empty:
-        last_dt    = df_existing["DATE"].max()
-        cutoff_dt  = last_dt - timedelta(days=5)  # 5 μέρες overlap
+        last_dt   = df_existing["DATE"].max()
+        cutoff_dt = last_dt - timedelta(days=5)
 
-    new_rows = []
-    errors   = []
+    new_rows       = []
+    errors         = []
     emails_checked = 0
 
     try:
@@ -147,42 +113,39 @@ def fetch_invoices_incremental(password, full_scan=False):
 
             for msg in messages:
                 msg_date = msg.date
-
-                # Skip παλιά emails σε incremental mode
                 if not full_scan and cutoff_dt and msg_date and msg_date < cutoff_dt:
                     continue
-
-                # Skip πάρα πολύ παλιά σε full scan
                 if full_scan:
-                    cutoff_year = datetime.now().year - DEEP_SCAN_YEARS
-                    if msg_date and msg_date.year < cutoff_year:
+                    cutoff_full = datetime.now() - timedelta(days=365*DEEP_SCAN_YEARS)
+                    if msg_date and msg_date < cutoff_full:
                         continue
 
-                emails_checked += 1
-
                 for att in msg.attachments:
-                    if att.filename and att.filename.lower().endswith(('.xlsx', '.csv', '.xls')):
-                        df = find_header_and_load(att.payload, att.filename)
-                        if df is not None:
-                            col_date  = next((c for c in df.columns if 'ΗΜΕΡΟΜΗΝΙΑ' in c), None)
-                            col_value = next((c for c in df.columns if 'ΑΞΙΑ' in c or 'ΣΥΝΟΛΟ' in c), None)
-                            col_type  = next((c for c in df.columns if 'ΤΥΠΟΣ' in c), None)
+                    if not att.filename: continue
+                    fname = att.filename.lower()
+                    if not (fname.endswith('.xlsx') or fname.endswith('.xls') or fname.endswith('.csv')):
+                        continue
+                    emails_checked += 1
+                    df_parsed = find_header_and_load(att.payload, att.filename)
+                    if df_parsed is None: continue
 
-                            if col_date and col_value and col_type:
-                                temp_df = df[[col_date, col_type, col_value]].copy()
-                                temp_df.columns = ['DATE', 'TYPE', 'VALUE']
-                                temp_df['DATE']  = pd.to_datetime(temp_df['DATE'], errors='coerce')
-                                if temp_df['VALUE'].dtype == object:
-                                    temp_df['VALUE'] = temp_df['VALUE'].astype(str).str.replace('€','').str.replace(',','.').str.strip()
-                                temp_df['VALUE'] = pd.to_numeric(temp_df['VALUE'], errors='coerce').fillna(0)
-                                temp_df = temp_df.dropna(subset=['DATE'])
+                    col_map = {}
+                    for c in df_parsed.columns:
+                        cu = c.upper()
+                        if "ΤΥΠΟΣ" in cu: col_map[c] = "TYPE"
+                        elif "ΗΜΕΡΟΜΗΝΙΑ" in cu: col_map[c] = "DATE"
+                        elif "ΑΞΙΑ" in cu or "VALUE" in cu or "ΠΟΣΟ" in cu: col_map[c] = "VALUE"
+                    df_parsed = df_parsed.rename(columns=col_map)
 
-                                # Filter: keep only rows after cutoff
-                                if not full_scan and cutoff_dt:
-                                    temp_df = temp_df[temp_df['DATE'] >= cutoff_dt]
+                    if not all(c in df_parsed.columns for c in ["DATE","TYPE","VALUE"]):
+                        continue
 
-                                new_rows.append(temp_df)
-
+                    df_parsed = df_parsed[["DATE","TYPE","VALUE"]].copy()
+                    df_parsed["DATE"]  = pd.to_datetime(df_parsed["DATE"], errors="coerce", dayfirst=True)
+                    df_parsed["VALUE"] = pd.to_numeric(df_parsed["VALUE"], errors="coerce")
+                    df_parsed = df_parsed.dropna(subset=["DATE","VALUE"])
+                    if not df_parsed.empty:
+                        new_rows.append(df_parsed)
     except Exception as e:
         errors.append(str(e))
 
@@ -193,12 +156,30 @@ def get_week_range(d):
     return start, start + timedelta(days=6)
 
 # ── LOAD DATA ─────────────────────────────────────────────────────────────────
-df  = load_all()
+df    = load_invoices()
 today = date.today()
 
+# ── AUTO-SYNC (κάθε 30 λεπτά) ────────────────────────────────────────────────
+import streamlit.components.v1 as _sc
+import time as _time
+
+_AUTO_MINS = 30
+_sc.html(f'<script>setTimeout(()=>{{window.parent.location.reload();}},{_AUTO_MINS*60*1000});</script>', height=0)
+
+if "inv_sync_ts" not in st.session_state:
+    st.session_state.inv_sync_ts = 0
+
+if _SECRET_PW and (_time.time() - st.session_state.inv_sync_ts > _AUTO_MINS * 60):
+    st.session_state.inv_sync_ts = _time.time()
+    try:
+        _new_dfs, _, _ = fetch_invoices_incremental(_SECRET_PW, full_scan=False)
+        if _new_dfs:
+            merge_invoices(_new_dfs)
+            df = load_invoices()
+    except Exception:
+        pass
+
 # ── RENDER ────────────────────────────────────────────────────────────────────
-
-
 st.markdown("""
 <div class="topbar">
   <div class="ptitle">📄 Έλεγχος Τιμολογίων</div>
@@ -212,7 +193,6 @@ with col_back:
         st.switch_page("Home.py")
     st.markdown("</div>", unsafe_allow_html=True)
 
-# ── TABS ─────────────────────────────────────────────────────────────────────
 tab_week, tab_month, tab_update = st.tabs(["📅 Εβδομαδιαία", "📆 Μηνιαία", "🔄 Ενημέρωση"])
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -244,8 +224,7 @@ with tab_week:
             st.dataframe(
                 disp.rename(columns={"DATE":"ΗΜΕΡΟΜΗΝΙΑ","TYPE":"ΤΥΠΟΣ","VALUE":"ΑΞΙΑ"})
                     .style.format({"ΑΞΙΑ": "{:.2f} €"}),
-                use_container_width=True, hide_index=True
-            )
+                use_container_width=True, hide_index=True)
         else:
             st.markdown('<div class="warn-box">Δεν υπάρχουν εγγραφές για αυτή την εβδομάδα.</div>', unsafe_allow_html=True)
 
@@ -280,8 +259,7 @@ with tab_month:
             st.dataframe(
                 disp.rename(columns={"DATE":"ΗΜΕΡΟΜΗΝΙΑ","TYPE":"ΤΥΠΟΣ","VALUE":"ΑΞΙΑ"})
                     .style.format({"ΑΞΙΑ": "{:.2f} €"}),
-                use_container_width=True, hide_index=True
-            )
+                use_container_width=True, hide_index=True)
 
             csv = m_df.rename(columns={"DATE":"ΗΜΕΡΟΜΗΝΙΑ","TYPE":"ΤΥΠΟΣ","VALUE":"ΑΞΙΑ"}).to_csv(index=False).encode("utf-8-sig")
             st.download_button(f"📥 Λήψη {MONTHS_GR[s_m-1]} {s_y} CSV", csv, f"invoices_{s_y}_{s_m:02d}.csv", "text/csv")
@@ -302,41 +280,30 @@ with tab_update:
 
     col_inc, col_full = st.columns(2)
     run_inc  = col_inc.button("⚡ Γρήγορη Ενημέρωση (Νέα μόνο)", use_container_width=True)
-    run_full = col_full.button("🔍 Βαθιά Σάρωση (2 χρόνια)", use_container_width=True)
+    run_full = col_full.button("🔍 Βαθιά Σάρωση (2 χρόνια)",     use_container_width=True)
 
     if (run_inc or run_full) and inv_pw:
         lbl = "Βαθιά σάρωση 2 ετών..." if run_full else "Φόρτωση νέων emails..."
         with st.spinner(lbl):
             new_dfs, errs, checked = fetch_invoices_incremental(inv_pw, full_scan=run_full)
-
         if errs:
             st.error(f"❌ Σφάλμα: {errs[0]}")
         elif not new_dfs:
             st.markdown(f'<div class="info-box">✅ Ελέγχθηκαν {checked} emails — δεν βρέθηκαν νέα δεδομένα.</div>', unsafe_allow_html=True)
         else:
-            combined_new = pd.concat(new_dfs, ignore_index=True)
-            old_all = load_all()
-            merged  = pd.concat([old_all, combined_new]).drop_duplicates(subset=["DATE","TYPE","VALUE"]).sort_values("DATE", ascending=False).reset_index(drop=True)
-            save_and_archive(merged)
-            n_new = len(combined_new)
-            st.success(f"✅ Ενημερώθηκε! Βρέθηκαν {n_new} νέες γραμμές από {checked} emails.")
+            n_new = merge_invoices(new_dfs)
+            st.success(f"✅ Ενημερώθηκε! {n_new} νέες γραμμές από {checked} emails — αποθηκεύτηκαν στο Google Sheets.")
             st.rerun()
 
     elif (run_inc or run_full) and not inv_pw:
         st.error("Εισάγετε App Password.")
 
-    # Stats
     if not df.empty:
-        st.markdown('<div class="sh">Στατιστικά Cache</div>', unsafe_allow_html=True)
-        n_cache = len(pd.read_csv(INV_CACHE)) if os.path.exists(INV_CACHE) else 0
-        n_arch  = len(pd.read_csv(INV_ARCHIVE)) if os.path.exists(INV_ARCHIVE) else 0
-        oldest  = df["DATE"].min().strftime("%d/%m/%Y") if not df.empty else "—"
-        newest  = df["DATE"].max().strftime("%d/%m/%Y") if not df.empty else "—"
-        st.markdown(f"""<div class="kr kr4">
-          <div class="kc" style="--a:#6b8fd4"><div class="kl">Εγγραφές Cache</div><div class="kv">{n_cache}</div></div>
-          <div class="kc" style="--a:#7c5abf"><div class="kl">Εγγραφές Archive</div><div class="kv">{n_arch}</div></div>
+        st.markdown('<div class="sh">Στατιστικά Google Sheets</div>', unsafe_allow_html=True)
+        oldest = df["DATE"].min().strftime("%d/%m/%Y")
+        newest = df["DATE"].max().strftime("%d/%m/%Y")
+        st.markdown(f"""<div class="kr kr3">
+          <div class="kc" style="--a:#6b8fd4"><div class="kl">Σύνολο Εγγραφών</div><div class="kv">{len(df)}</div></div>
           <div class="kc" style="--a:#5a9f7a"><div class="kl">Από</div><div class="kv" style="font-size:.85rem;">{oldest}</div></div>
           <div class="kc" style="--a:#5a9f7a"><div class="kl">Έως</div><div class="kv" style="font-size:.85rem;">{newest}</div></div>
         </div>""", unsafe_allow_html=True)
-
-st.markdown("</div>", unsafe_allow_html=True)

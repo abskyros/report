@@ -8,20 +8,20 @@ import pytesseract
 
 st.set_page_config(page_title="Πωλήσεις — AB Skyros", page_icon="📊", layout="wide", initial_sidebar_state="collapsed")
 
+from gsheets_helper import load_sales, merge_sales
+
 # ── CONFIG ────────────────────────────────────────────────────────────────────
 SALES_EMAIL_USER   = "ftoulisgm@gmail.com"
 SALES_EMAIL_SENDER = "abf.skyros@gmail.com"
 SALES_SUBJECT_KW   = "ΑΒ ΣΚΥΡΟΣ"
-SALES_CACHE        = "sales_cache.csv"
-SALES_ARCHIVE      = "sales_archive.csv"
-DEEP_SCAN_YEARS    = 2
 BATCH_SIZE         = 25
+DEEP_SCAN_YEARS    = 2
 
-# ── SECRETS ──────────────────────────────────────────────────────────────────
+# ── SECRETS ───────────────────────────────────────────────────────────────────
 _SECRET_PW = ""
 try:
     _SECRET_PW = st.secrets.get("SALES_EMAIL_PASS", "")
-    if not _SECRET_PW: # Fallback in case it's named EMAIL_PASS
+    if not _SECRET_PW:
         _SECRET_PW = st.secrets.get("EMAIL_PASS", "")
 except:
     pass
@@ -59,9 +59,9 @@ section[data-testid="stSidebar"]{display:none!important;}
 [data-testid="stDataFrame"]{border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;}
 .info-box{background:#ecfdf5;border:1px solid #a7f3d0;border-radius:10px;padding:.8rem 1rem;font-size:.73rem;color:#059669;margin:.6rem 0;}
 .warn-box{background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:.8rem 1rem;font-size:.73rem;color:#92400e;margin:.6rem 0;}
-.prog-wrap { background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:1rem; margin:.5rem 0; }
-.prog-title { font-size:.75rem; font-weight:600; color:#0f172a; margin-bottom:.4rem; }
-.prog-sub { font-size:.65rem; color:#94a3b8; margin-top:.35rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.prog-wrap{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:1rem;margin:.5rem 0;}
+.prog-title{font-size:.75rem;font-weight:600;color:#0f172a;margin-bottom:.4rem;}
+.prog-sub{font-size:.65rem;color:#94a3b8;margin-top:.35rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -72,82 +72,12 @@ def fmt(v):
     if v is None or (isinstance(v, float) and pd.isna(v)): return "—"
     return f"{v:,.2f}€".replace(",","X").replace(".",",").replace("X",".")
 
-def _dedup(df):
-    if df.empty: return df
-    return (df.sort_values("net_sales",ascending=False)
-              .drop_duplicates("date",keep="first")
-              .sort_values("date",ascending=False)
-              .reset_index(drop=True))
-
-def load_cache():
-    if os.path.exists(SALES_CACHE):
-        try:
-            df = pd.read_csv(SALES_CACHE)
-            if not df.empty:
-                df["date"] = pd.to_datetime(df["date"]).dt.date
-                return _dedup(df)
-        except: pass
-    return pd.DataFrame(columns=["date","net_sales","customers","avg_basket"])
-
-def load_all():
-    parts = []
-    for f in [SALES_CACHE, SALES_ARCHIVE]:
-        if os.path.exists(f):
-            try:
-                df = pd.read_csv(f)
-                if not df.empty:
-                    df["date"] = pd.to_datetime(df["date"]).dt.date
-                    parts.append(df)
-            except: pass
-    if parts:
-        return _dedup(pd.concat(parts, ignore_index=True))
-    return pd.DataFrame(columns=["date","net_sales","customers","avg_basket"])
-
-def save_split(df):
-    df = _dedup(df)
-    cut = date.today() - timedelta(days=365*DEEP_SCAN_YEARS)
-    recent = df[df["date"] >= cut].copy()
-    old    = df[df["date"]  < cut].copy()
-    recent.to_csv(SALES_CACHE, index=False)
-    if not old.empty:
-        if os.path.exists(SALES_ARCHIVE):
-            try:
-                ex = pd.read_csv(SALES_ARCHIVE)
-                ex["date"] = pd.to_datetime(ex["date"]).dt.date
-                old = _dedup(pd.concat([ex, old], ignore_index=True))
-            except: pass
-        old.to_csv(SALES_ARCHIVE, index=False)
-
-def merge_in(recs: list) -> int:
-    if not recs: return 0
-    ndf = _dedup(pd.DataFrame(recs))
-    old = load_cache()
-    add = []; n = 0
-    for _, r in ndf.iterrows():
-        ex = old[old["date"] == r["date"]]
-        if ex.empty:
-            add.append(r); n += 1
-        elif r["net_sales"] > ex.iloc[0]["net_sales"]:
-            old = old[old["date"] != r["date"]]
-            add.append(r); n += 1
-    if add:
-        save_split(_dedup(pd.concat([old, pd.DataFrame(add)], ignore_index=True)))
-    return n
-
 def get_week_range(d):
     start = d - timedelta(days=d.weekday())
     return start, start + timedelta(days=6)
 
 # ── OCR ENGINE V5 ─────────────────────────────────────────────────────────────
-# Διορθώσεις vs παλιό:
-# • Smart rotation (rotate 90° αν δεν βρεθούν keywords χωρίς)
-# • DPI 250 + σελίδες 1-6 (πιάνει Hourly Productivity Totals)
-# • "Run On" ως PRIMARY ημερομηνία (όχι "For" που είναι +1 ημέρα)
-# • Guard: αποκλείει 1082 (αριθμός καταστήματος) από net_sales
-# • Guard: αποκλείει έτη 2020-2030 από customers
-
 def _num(s: str):
-    """9.064,56 → 9064.56 · 1.082,00 → 1082.0 · 336 → 336.0"""
     if not s: return None
     s = s.strip().replace(" ","").replace("€","").rstrip(".,")
     if not s: return None
@@ -172,71 +102,50 @@ def _find(txt: str, patterns: list, lo=None, hi=None, exclude=None):
             except: continue
     return None
 
-# Αριθμοί που μπαίνουν συχνά λάθος ως net_sales (αριθμός καταστήματος κλπ)
-_NS_EXCLUDE = [1082.0]  # Branch 1082
-# Χρονολογίες που μπαίνουν λάθος ως customers
+_NS_EXCLUDE = [1082.0]
 _YEAR_GUARD = set(range(2018, 2032))
 
 def _ocr_page(img):
-    """Smart OCR: δοκιμάζει πρώτα χωρίς περιστροφή, μετά 90° CCW."""
     cfg = "--psm 6 --oem 3"
     t = pytesseract.image_to_string(img, lang="ell+eng", config=cfg)
     if any(k in t for k in ("NetDay","TotSal","Run On","un On","Totals","NumOf","For ")):
         return t
-    # PDFs AB Σκύρος: rotated 90° CCW
     return pytesseract.image_to_string(img.rotate(90, expand=True), lang="ell+eng", config=cfg)
 
 def extract(pdf_bytes: bytes) -> dict:
-    """
-    OCR Engine v5.
-    Ημερομηνία: "Run On: 13/05/2026" (primary) → σωστή ημέρα πωλήσεων
-                 "For 14/05/2026" -1 ημέρα (fallback)
-    Δεδομένα:   Hourly Totals (σελ.5-6) → αν αποτύχει → Dept Report keywords
-    """
     r = {"date":None,"net_sales":None,"customers":None,"avg_basket":None}
     try:
-        # DPI 250, σελίδες 1-6 (Department Report + Hourly Productivity)
         images = convert_from_bytes(pdf_bytes, dpi=250, first_page=1, last_page=6)
         if not images: return r
         txt = "\n".join(_ocr_page(img) for img in images)
 
-        # ── ΗΜΕΡΟΜΗΝΙΑ ──────────────────────────────────────────────────────
-        # Primary: "Run On: 13/05/2026" ή "un On;" (OCR συχνά κόβει το R ή γράφει ;)
         m = re.search(r'[Rr]?[Uu]n\s*[Oo0]n\s*[;:\s]+?(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})', txt, re.IGNORECASE)
         if m:
             try: r["date"] = date(int(m.group(3)), int(m.group(2)), int(m.group(1)))
             except: pass
-        # Fallback: "For 14/05/2026" = πωλήσεις ΧΘΕΣ → -1
         if not r["date"]:
             m = re.search(r'(?:^|\s)[Ff][Oo0]r\s+(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})', txt, re.MULTILINE)
             if m:
                 try: r["date"] = date(int(m.group(3)), int(m.group(2)), int(m.group(1))) - timedelta(days=1)
                 except: pass
 
-        # ── HOURLY PRODUCTIVITY TOTALS (πιο αξιόπιστη πηγή) ─────────────────
-        # "Totals: 10516,57  100.00  385  2,00  5258.29  192.50  27,32  4211"
-        #           sales     100%   cust  pos   amt/pos  c/pos  avg_bsk items
         m = re.search(
             r'[Tt]otals?\s*:?\s*([\d.,]{4,10})\s+100[.,]00\s+(\d{2,4})'
-            r'\s+[\d.,]+\s+[\d.,]+\s+[\d.,]+\s+([\d.,]{3,7})\s+\d+',
-            txt
-        )
+            r'\s+[\d.,]+\s+[\d.,]+\s+[\d.,]+\s+([\d.,]{3,7})\s+\d+', txt)
         if m:
             ns  = _num(m.group(1))
             cus = int(m.group(2))
             ab  = _num(m.group(3))
-            if ns  and 2000 < ns  < 80000 and ns  not in [v for v in _NS_EXCLUDE]:
-                r["net_sales"]  = ns
+            if ns and 2000 < ns < 80000 and ns not in _NS_EXCLUDE:
+                r["net_sales"] = ns
             if 50 < cus < 2000 and cus not in _YEAR_GUARD:
-                r["customers"]  = cus
-            if ab  and 5 < ab < 200:
+                r["customers"] = cus
+            if ab and 5 < ab < 200:
                 r["avg_basket"] = ab
 
-        # ── DEPARTMENT REPORT KEYWORDS (backup) ─────────────────────────────
         clean = re.sub(r'\s+', '', txt).upper()
 
         if not r["net_sales"]:
-            # Εξαιρούμε τον αριθμό καταστήματος 1082 (false positive)
             r["net_sales"] = _find(txt, [
                 r'NetDaySalDis\s+([\d.,]+)',
                 r'Ne[t7][Dd]ay[Ss]al[Dd][i1][s5]\s+([\d.,]+)',
@@ -249,7 +158,6 @@ def extract(pdf_bytes: bytes) -> dict:
                 try:
                     raw = re.sub(r'[.,\s]', '', m.group(1).strip())
                     v = int(raw)
-                    # Guard: αποκλείει χρονολογίες και unrealistic τιμές
                     if 50 < v < 2000 and v not in _YEAR_GUARD:
                         r["customers"] = v
                 except: pass
@@ -260,7 +168,6 @@ def extract(pdf_bytes: bytes) -> dict:
                 r'Avg[Ss]a[il][Cc]us\s+([\d.,]+)',
             ], lo=5, hi=200)
 
-        # ── SEQUENCE FALLBACK ────────────────────────────────────────────────
         if r["net_sales"] and (not r["customers"] or not r["avg_basket"]):
             nums = [v for x in re.findall(r'\d+[.,\d]*', txt)
                     if (v := _num(x)) is not None]
@@ -273,31 +180,20 @@ def extract(pdf_bytes: bytes) -> dict:
                         elif r["customers"] and not r["avg_basket"] and 5 < nv < 200:
                             r["avg_basket"] = nv; break
                     break
-
     except Exception: pass
     return r
 
-# ── EMAIL FETCHING ────────────────────────────────────────────────────────────
+# ── EMAIL FETCHING ─────────────────────────────────────────────────────────────
 def _is_valid(subj):
     s = (subj or "").upper()
     return SALES_SUBJECT_KW in s or "SKYROS" in s
 
 def fetch(pw, since: date | None = None, want_records: int = 60, email_scan_limit: int = 400):
-    """
-    Φέρνει email και κάνει OCR.
-    want_records: πόσες ΕΓΚΥΡΕΣ εγγραφές πωλήσεων θέλουμε (όχι emails!)
-    email_scan_limit: μέγιστο emails που θα ανοίξουμε συνολικά
-    
-    BUG FIX: Πριν το limit αφορούσε emails → αν 10 emails περιείχαν 5 άσχετα
-             έγγραφα, έβγαιναν μόνο 5 πωλήσεις.
-             Τώρα σκανάρει όσα emails χρειαστεί μέχρι να βρει want_records πωλήσεις.
-    """
     recs, errs, n = [], [], 0
     try:
         with MailBox("imap.gmail.com").login(SALES_EMAIL_USER, pw) as mb:
             for msg in mb.fetch(AND(from_=SALES_EMAIL_SENDER), limit=email_scan_limit, reverse=True, mark_seen=False):
-                if len(recs) >= want_records:
-                    break
+                if len(recs) >= want_records: break
                 d = msg.date.date() if msg.date else None
                 if since and d and d < since: continue
                 if not _is_valid(msg.subject): continue
@@ -317,18 +213,13 @@ def deep_scan(pw):
     try:
         with MailBox("imap.gmail.com").login(SALES_EMAIL_USER, pw) as mb:
             s["phase"] = "listing"; yield s.copy()
-
             hdrs = [h for h in mb.fetch(AND(from_=SALES_EMAIL_SENDER), limit=3000, reverse=True, mark_seen=False, headers_only=True)
                     if h.date and h.date.date() >= cutoff and _is_valid(h.subject)]
-
             s["total"] = len(hdrs); s["phase"] = "ocr"; yield s.copy()
             if not hdrs: s["ok"] = True; yield s.copy(); return
-
             batch = []
             for i, h in enumerate(hdrs):
-                s["done"] = i+1
-                s["cur"]  = (h.subject or "")[:50]
-                yield s.copy()
+                s["done"] = i+1; s["cur"] = (h.subject or "")[:50]; yield s.copy()
                 try:
                     full = list(mb.fetch(AND(uid=str(h.uid)), mark_seen=False))
                     if not full: continue
@@ -338,31 +229,24 @@ def deep_scan(pw):
                     if rec["date"] and rec["net_sales"] is not None:
                         batch.append(rec)
                     if len(batch) >= BATCH_SIZE:
-                        s["saved"] += merge_in(batch); batch = []; yield s.copy()
+                        s["saved"] += merge_sales(batch); batch = []; yield s.copy()
                 except: continue
-
-            if batch: s["saved"] += merge_in(batch)
+            if batch: s["saved"] += merge_sales(batch)
             s["ok"] = True; yield s.copy()
     except Exception as e:
         s["err"] = str(e); s["ok"] = True; yield s.copy()
 
-
 # ── LOAD DATA ─────────────────────────────────────────────────────────────────
-df  = load_all()
+df    = load_sales()
 today = date.today()
 
-# ── AUTO-SYNC — ΠΟΤΕ ΔΕΝ ΚΟΙΜΑΤΑΙ ────────────────────────────────────────────
-# Τρέχει κάθε 25 λεπτά ανεξάρτητα από αλληλεπίδραση χρήστη.
-# Αν cache άδειο (π.χ. μετά redeploy) → full scan 35 ημερών.
-# Αν cache υπάρχει → incremental από τελευταία γνωστή ημέρα.
+# ── AUTO-SYNC (κάθε 25 λεπτά) ────────────────────────────────────────────────
 import streamlit.components.v1 as _sc
 import time as _time
 
 _AUTO_MINS = 25
-_sc.html(
-    f'<script>setTimeout(()=>{{window.parent.location.reload();}},{_AUTO_MINS*60*1000});</script>',
-    height=0,
-)
+_sc.html(f'<script>setTimeout(()=>{{window.parent.location.reload();}},{_AUTO_MINS*60*1000});</script>', height=0)
+
 if "sales_sync_ts" not in st.session_state:
     st.session_state.sales_sync_ts = 0
 
@@ -370,20 +254,17 @@ if _SECRET_PW and (_time.time() - st.session_state.sales_sync_ts > _AUTO_MINS * 
     st.session_state.sales_sync_ts = _time.time()
     try:
         if df.empty:
-            # Cache άδειο → φέρε τις τελευταίες 35 ημέρες
             _ar, _, _ = fetch(_SECRET_PW, want_records=35, email_scan_limit=200)
         else:
-            # Incremental: -2 μέρες για overlap (διορθώνει και ελαφριά λάθη)
             _since = df["date"].max() - timedelta(days=2)
             _ar, _, _ = fetch(_SECRET_PW, since=_since, want_records=7, email_scan_limit=50)
         if _ar:
-            merge_in(_ar)
-            df = load_all()
+            merge_sales(_ar)
+            df = load_sales()
     except Exception:
-        pass  # Σιωπηλή αποτυχία — δεν σπάμε το UI
+        pass
 
 # ── RENDER ────────────────────────────────────────────────────────────────────
-
 st.markdown("""
 <div class="topbar">
   <div class="ptitle">📊 Πωλήσεις Καταστήματος</div>
@@ -397,7 +278,6 @@ with col_back:
         st.switch_page("Home.py")
     st.markdown("</div>", unsafe_allow_html=True)
 
-# ── TABS ─────────────────────────────────────────────────────────────────────
 tab_week, tab_month, tab_update = st.tabs(["📅 Εβδομαδιαία", "📆 Μηνιαία", "🔄 Ενημέρωση"])
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -426,14 +306,13 @@ with tab_week:
             disp = w_df.copy()
             disp["date"] = disp["date"].apply(lambda d: d.strftime("%d/%m/%Y"))
             st.dataframe(
-                disp.rename(columns={"date":"ΗΜΕΡΟΜΗΝΙΑ", "net_sales":"ΚΑΘΑΡΕΣ ΠΩΛΗΣΕΙΣ", "customers":"ΠΕΛΑΤΕΣ", "avg_basket":"ΜΟ ΚΑΛΑΘΙΟΥ"})
+                disp.rename(columns={"date":"ΗΜΕΡΟΜΗΝΙΑ","net_sales":"ΚΑΘΑΡΕΣ ΠΩΛΗΣΕΙΣ","customers":"ΠΕΛΑΤΕΣ","avg_basket":"ΜΟ ΚΑΛΑΘΙΟΥ"})
                     .style.format({
                         "ΚΑΘΑΡΕΣ ΠΩΛΗΣΕΙΣ": lambda v: fmt(v),
-                        "ΜΟ ΚΑΛΑΘΙΟΥ": lambda v: fmt(v) if pd.notna(v) else "—",
-                        "ΠΕΛΑΤΕΣ": lambda v: f"{int(v)}" if pd.notna(v) else "—"
+                        "ΜΟ ΚΑΛΑΘΙΟΥ":       lambda v: fmt(v) if pd.notna(v) else "—",
+                        "ΠΕΛΑΤΕΣ":           lambda v: f"{int(v)}" if pd.notna(v) else "—"
                     }),
-                use_container_width=True, hide_index=True
-            )
+                use_container_width=True, hide_index=True)
         else:
             st.markdown('<div class="warn-box">Δεν υπάρχουν εγγραφές για αυτή την εβδομάδα.</div>', unsafe_allow_html=True)
 
@@ -466,16 +345,15 @@ with tab_month:
             disp = m_df.copy()
             disp["date"] = disp["date"].apply(lambda d: d.strftime("%d/%m/%Y"))
             st.dataframe(
-                disp.rename(columns={"date":"ΗΜΕΡΟΜΗΝΙΑ", "net_sales":"ΚΑΘΑΡΕΣ ΠΩΛΗΣΕΙΣ", "customers":"ΠΕΛΑΤΕΣ", "avg_basket":"ΜΟ ΚΑΛΑΘΙΟΥ"})
+                disp.rename(columns={"date":"ΗΜΕΡΟΜΗΝΙΑ","net_sales":"ΚΑΘΑΡΕΣ ΠΩΛΗΣΕΙΣ","customers":"ΠΕΛΑΤΕΣ","avg_basket":"ΜΟ ΚΑΛΑΘΙΟΥ"})
                     .style.format({
                         "ΚΑΘΑΡΕΣ ΠΩΛΗΣΕΙΣ": lambda v: fmt(v),
-                        "ΜΟ ΚΑΛΑΘΙΟΥ": lambda v: fmt(v) if pd.notna(v) else "—",
-                        "ΠΕΛΑΤΕΣ": lambda v: f"{int(v)}" if pd.notna(v) else "—"
+                        "ΜΟ ΚΑΛΑΘΙΟΥ":       lambda v: fmt(v) if pd.notna(v) else "—",
+                        "ΠΕΛΑΤΕΣ":           lambda v: f"{int(v)}" if pd.notna(v) else "—"
                     }),
-                use_container_width=True, hide_index=True
-            )
+                use_container_width=True, hide_index=True)
 
-            csv = m_df.rename(columns={"date":"ΗΜΕΡΟΜΗΝΙΑ", "net_sales":"ΚΑΘΑΡΕΣ ΠΩΛΗΣΕΙΣ", "customers":"ΠΕΛΑΤΕΣ", "avg_basket":"ΜΟ ΚΑΛΑΘΙΟΥ"}).to_csv(index=False).encode("utf-8-sig")
+            csv = m_df.rename(columns={"date":"ΗΜΕΡΟΜΗΝΙΑ","net_sales":"ΚΑΘΑΡΕΣ ΠΩΛΗΣΕΙΣ","customers":"ΠΕΛΑΤΕΣ","avg_basket":"ΜΟ ΚΑΛΑΘΙΟΥ"}).to_csv(index=False).encode("utf-8-sig")
             st.download_button(f"📥 Λήψη {MONTHS_GR[s_m-1]} {s_y} CSV", csv, f"sales_{s_y}_{s_m:02d}.csv", "text/csv")
         else:
             st.markdown('<div class="warn-box">Δεν υπάρχουν εγγραφές για αυτόν τον μήνα.</div>', unsafe_allow_html=True)
@@ -494,73 +372,58 @@ with tab_update:
 
     col_test, col_inc, col_full = st.columns(3)
     run_test = col_test.button("🧪 Δοκιμή (10 Τελευταία)", use_container_width=True)
-    run_inc  = col_inc.button("⚡ Γρήγορη (Νέα μόνο)", use_container_width=True)
-    run_full = col_full.button("🔍 Βαθιά (2 χρόνια)", use_container_width=True)
+    run_inc  = col_inc.button("⚡ Γρήγορη (Νέα μόνο)",    use_container_width=True)
+    run_full = col_full.button("🔍 Βαθιά (2 χρόνια)",     use_container_width=True)
 
     if run_test and sales_pw:
         with st.spinner("Ανάγνωση των 10 τελευταίων email & OCR..."):
             recs, errs, n_checked = fetch(sales_pw, since=None, want_records=10, email_scan_limit=100)
-            
         if errs:
             st.error(f"❌ Σφάλμα: {errs[0]}")
         else:
             if recs:
-                st.success(f"✅ Η Δοκιμή πέτυχε! Διαβάστηκαν με επιτυχία {len(recs)} εγγραφές από τα PDF.")
-                
-                # --- ΕΜΦΑΝΙΣΗ ΑΠΟΤΕΛΕΣΜΑΤΩΝ ΕΠΙΤΟΠΟΥ ---
-                st.markdown("### 📊 Τι διάβασε το OCR (Αποτελέσματα Δοκιμής):")
+                st.success(f"✅ Η Δοκιμή πέτυχε! Διαβάστηκαν {len(recs)} εγγραφές.")
                 test_df = pd.DataFrame(recs)
-                # Καθαρισμός διπλότυπων (ίδια ημερομηνία) μόνο για την εμφάνιση της δοκιμής
                 test_df = test_df.sort_values("net_sales", ascending=False).drop_duplicates("date").sort_values("date", ascending=False)
-                
                 test_display = test_df.copy()
                 test_display["date"] = pd.to_datetime(test_display["date"]).dt.strftime("%d/%m/%Y")
-                
                 st.dataframe(
-                    test_display.rename(columns={"date":"ΗΜΕΡΟΜΗΝΙΑ", "net_sales":"ΚΑΘΑΡΕΣ ΠΩΛΗΣΕΙΣ", "customers":"ΠΕΛΑΤΕΣ", "avg_basket":"ΜΟ ΚΑΛΑΘΙΟΥ"})
+                    test_display.rename(columns={"date":"ΗΜΕΡΟΜΗΝΙΑ","net_sales":"ΚΑΘΑΡΕΣ ΠΩΛΗΣΕΙΣ","customers":"ΠΕΛΑΤΕΣ","avg_basket":"ΜΟ ΚΑΛΑΘΙΟΥ"})
                         .style.format({
                             "ΚΑΘΑΡΕΣ ΠΩΛΗΣΕΙΣ": lambda v: fmt(v),
-                            "ΜΟ ΚΑΛΑΘΙΟΥ": lambda v: fmt(v) if pd.notna(v) else "—",
-                            "ΠΕΛΑΤΕΣ": lambda v: f"{int(v)}" if pd.notna(v) else "—"
+                            "ΜΟ ΚΑΛΑΘΙΟΥ":       lambda v: fmt(v) if pd.notna(v) else "—",
+                            "ΠΕΛΑΤΕΣ":           lambda v: f"{int(v)}" if pd.notna(v) else "—"
                         }),
-                    use_container_width=True, hide_index=True
-                )
-                
-                saved = merge_in(recs)
-                st.info(f"💾 Αποθηκεύτηκαν {saved} καθαρές εγγραφές στο ιστορικό σας.")
-                
-                # Κουμπί για να καθαρίσει η οθόνη και να ενημερωθούν τα γραφήματα!
+                    use_container_width=True, hide_index=True)
+                saved = merge_sales(recs)
+                st.info(f"💾 Αποθηκεύτηκαν {saved} νέες εγγραφές στο Google Sheets.")
                 if st.button("🔄 Ανανέωση Γραφημάτων", use_container_width=True):
                     st.rerun()
             else:
-                st.warning(f"⚠️ Ελέγχθηκαν {n_checked} αρχεία PDF αλλά δεν μπόρεσε να διαβάσει δεδομένα. Δες αν τα αρχεία είναι σωστά.")
+                st.warning(f"⚠️ Ελέγχθηκαν {n_checked} αρχεία PDF αλλά δεν μπόρεσε να διαβάσει δεδομένα.")
 
     elif run_inc and sales_pw:
         with st.spinner("Ανάγνωση πρόσφατων email & OCR..."):
-            df_existing = load_cache()
-            since_dt = (df_existing["date"].max() - timedelta(days=5)) if not df_existing.empty else None
+            existing = load_sales()
+            since_dt = (existing["date"].max() - timedelta(days=5)) if not existing.empty else None
             recs, errs, n_checked = fetch(sales_pw, since=since_dt, want_records=30, email_scan_limit=150)
-            
         if errs:
             st.error(f"❌ Σφάλμα: {errs[0]}")
         else:
-            saved = merge_in(recs)
+            saved = merge_sales(recs)
             if saved > 0:
-                st.success(f"✅ Ενημερώθηκε! Αποθηκεύτηκαν {saved} νέες εγγραφές από {n_checked} ελεγμένα PDF.")
+                st.success(f"✅ Ενημερώθηκε! {saved} νέες εγγραφές από {n_checked} PDF.")
                 st.rerun()
             else:
                 st.markdown(f'<div class="info-box">✅ Ελέγχθηκαν {n_checked} αρχεία PDF — δεν βρέθηκαν νέα δεδομένα.</div>', unsafe_allow_html=True)
 
     elif run_full and sales_pw:
-        st.markdown('<div class="warn-box">⏳ Βαθιά Σάρωση σε εξέλιξη. Η διαδικασία OCR θα διαρκέσει αρκετά. Μην κλείσετε τη σελίδα.</div>', unsafe_allow_html=True)
+        st.markdown('<div class="warn-box">⏳ Βαθιά Σάρωση σε εξέλιξη. Μην κλείσετε τη σελίδα.</div>', unsafe_allow_html=True)
         prog_bar = st.progress(0)
         info_box = st.empty()
-
         for s in deep_scan(sales_pw):
             if s["err"]:
-                info_box.error(f"Σφάλμα: {s['err']}")
-                break
-            
+                info_box.error(f"Σφάλμα: {s['err']}"); break
             ph = s["phase"]
             if ph == "connect":
                 info_box.markdown('<div class="prog-wrap"><div class="prog-title">Σύνδεση στο email...</div></div>', unsafe_allow_html=True)
@@ -570,33 +433,25 @@ with tab_update:
                 t = s["total"]; d = s["done"]
                 pct = int(d/t*100) if t else 0
                 prog_bar.progress(pct)
-                info_box.markdown(f"""
-                <div class="prog-wrap">
-                  <div class="prog-title">OCR σε εξέλιξη: {d} / {t} emails ελέγχθηκαν</div>
-                  <div class="prog-sub">💾 Έχουν αποθηκευτεί {s['saved']} εγγραφές μέχρι στιγμής... ({pct}%)</div>
+                info_box.markdown(f"""<div class="prog-wrap">
+                  <div class="prog-title">OCR: {d} / {t} emails</div>
+                  <div class="prog-sub">💾 {s['saved']} εγγραφές αποθηκεύτηκαν ({pct}%)</div>
                   <div class="prog-sub">Επεξεργασία: {s['cur']}</div>
                 </div>""", unsafe_allow_html=True)
-
             if s["ok"]:
                 prog_bar.progress(100)
-                st.success(f"✅ Η βαθιά σάρωση ολοκληρώθηκε! Διαβάστηκαν {s['total']} emails και αποθηκεύτηκαν {s['saved']} εγγραφές.")
+                st.success(f"✅ Ολοκληρώθηκε! {s['total']} emails → {s['saved']} εγγραφές στο Google Sheets.")
                 break
 
     elif (run_test or run_inc or run_full) and not sales_pw:
         st.error("Εισάγετε App Password.")
 
-    # Stats
     if not df.empty:
-        st.markdown('<div class="sh">Στατιστικά Cache</div>', unsafe_allow_html=True)
-        n_cache = len(pd.read_csv(SALES_CACHE)) if os.path.exists(SALES_CACHE) else 0
-        n_arch  = len(pd.read_csv(SALES_ARCHIVE)) if os.path.exists(SALES_ARCHIVE) else 0
-        oldest  = df["date"].min().strftime("%d/%m/%Y") if not df.empty else "—"
-        newest  = df["date"].max().strftime("%d/%m/%Y") if not df.empty else "—"
-        st.markdown(f"""<div class="kr kr4">
-          <div class="kc" style="--a:#10b981"><div class="kl">Εγγραφές Cache</div><div class="kv">{n_cache}</div></div>
-          <div class="kc" style="--a:#7c5abf"><div class="kl">Εγγραφές Archive</div><div class="kv">{n_arch}</div></div>
+        st.markdown('<div class="sh">Στατιστικά Google Sheets</div>', unsafe_allow_html=True)
+        oldest = df["date"].min().strftime("%d/%m/%Y")
+        newest = df["date"].max().strftime("%d/%m/%Y")
+        st.markdown(f"""<div class="kr kr3">
+          <div class="kc" style="--a:#10b981"><div class="kl">Σύνολο Εγγραφών</div><div class="kv">{len(df)}</div></div>
           <div class="kc" style="--a:#6b8fd4"><div class="kl">Από</div><div class="kv" style="font-size:.85rem;">{oldest}</div></div>
           <div class="kc" style="--a:#6b8fd4"><div class="kl">Έως</div><div class="kv" style="font-size:.85rem;">{newest}</div></div>
         </div>""", unsafe_allow_html=True)
-
-st.markdown("</div>", unsafe_allow_html=True)
