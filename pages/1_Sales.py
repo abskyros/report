@@ -138,81 +138,141 @@ def get_week_range(d):
     start = d - timedelta(days=d.weekday())
     return start, start + timedelta(days=6)
 
-# ── OCR ───────────────────────────────────────────────────────────────────────
-def _num(s: str) -> float:
-    s = s.strip().replace(" ","").replace("€","")
+# ── OCR ENGINE V5 ─────────────────────────────────────────────────────────────
+# Διορθώσεις vs παλιό:
+# • Smart rotation (rotate 90° αν δεν βρεθούν keywords χωρίς)
+# • DPI 250 + σελίδες 1-6 (πιάνει Hourly Productivity Totals)
+# • "Run On" ως PRIMARY ημερομηνία (όχι "For" που είναι +1 ημέρα)
+# • Guard: αποκλείει 1082 (αριθμός καταστήματος) από net_sales
+# • Guard: αποκλείει έτη 2020-2030 από customers
+
+def _num(s: str):
+    """9.064,56 → 9064.56 · 1.082,00 → 1082.0 · 336 → 336.0"""
+    if not s: return None
+    s = s.strip().replace(" ","").replace("€","").rstrip(".,")
+    if not s: return None
     if "." in s and "," in s:
-        s = s.replace(".","").replace(",",".")
+        s = s.replace(".","").replace(",",".") if s.rfind(",") > s.rfind(".") else s.replace(",","")
     elif "," in s:
         s = s.replace(",",".")
-    return float(s)
+    try: return float(s)
+    except: return None
 
-def _find(txt: str, patterns: list, lo=None, hi=None):
+def _find(txt: str, patterns: list, lo=None, hi=None, exclude=None):
     for pat in patterns:
         m = re.search(pat, txt, re.IGNORECASE)
         if m:
             try:
                 v = _num(m.group(1))
+                if v is None: continue
                 if lo is not None and v < lo: continue
                 if hi is not None and v > hi: continue
+                if exclude and any(abs(v - ex) < 0.5 for ex in exclude): continue
                 return v
             except: continue
     return None
 
+# Αριθμοί που μπαίνουν συχνά λάθος ως net_sales (αριθμός καταστήματος κλπ)
+_NS_EXCLUDE = [1082.0]  # Branch 1082
+# Χρονολογίες που μπαίνουν λάθος ως customers
+_YEAR_GUARD = set(range(2018, 2032))
+
+def _ocr_page(img):
+    """Smart OCR: δοκιμάζει πρώτα χωρίς περιστροφή, μετά 90° CCW."""
+    cfg = "--psm 6 --oem 3"
+    t = pytesseract.image_to_string(img, lang="ell+eng", config=cfg)
+    if any(k in t for k in ("NetDay","TotSal","Run On","un On","Totals","NumOf","For ")):
+        return t
+    # PDFs AB Σκύρος: rotated 90° CCW
+    return pytesseract.image_to_string(img.rotate(90, expand=True), lang="ell+eng", config=cfg)
+
 def extract(pdf_bytes: bytes) -> dict:
+    """
+    OCR Engine v5.
+    Ημερομηνία: "Run On: 13/05/2026" (primary) → σωστή ημέρα πωλήσεων
+                 "For 14/05/2026" -1 ημέρα (fallback)
+    Δεδομένα:   Hourly Totals (σελ.5-6) → αν αποτύχει → Dept Report keywords
+    """
     r = {"date":None,"net_sales":None,"customers":None,"avg_basket":None}
     try:
-        images = convert_from_bytes(pdf_bytes, dpi=200, first_page=1, last_page=3)
-        pages  = [pytesseract.image_to_string(img, lang="ell+eng", config="--psm 6 --oem 3") for img in images]
-        txt = "\n".join(pages)
+        # DPI 250, σελίδες 1-6 (Department Report + Hourly Productivity)
+        images = convert_from_bytes(pdf_bytes, dpi=250, first_page=1, last_page=6)
+        if not images: return r
+        txt = "\n".join(_ocr_page(img) for img in images)
 
-        for pat in [
-            r'[Ff]or\s*[:\-]?\s*(\d{1,2}/\d{1,2}/\d{4})',
-            r'[Ff]or\s*[:\-]?\s*(\d{1,2}\.\d{1,2}\.\d{4})',
-            r'(?:For|FOR)\s+(\d{2}/\d{2}/\d{4})',
-        ]:
-            m = re.search(pat, txt)
+        # ── ΗΜΕΡΟΜΗΝΙΑ ──────────────────────────────────────────────────────
+        # Primary: "Run On: 13/05/2026" ή "un On;" (OCR συχνά κόβει το R ή γράφει ;)
+        m = re.search(r'[Rr]?[Uu]n\s*[Oo0]n\s*[;:\s]+?(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})', txt, re.IGNORECASE)
+        if m:
+            try: r["date"] = date(int(m.group(3)), int(m.group(2)), int(m.group(1)))
+            except: pass
+        # Fallback: "For 14/05/2026" = πωλήσεις ΧΘΕΣ → -1
+        if not r["date"]:
+            m = re.search(r'(?:^|\s)[Ff][Oo0]r\s+(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})', txt, re.MULTILINE)
+            if m:
+                try: r["date"] = date(int(m.group(3)), int(m.group(2)), int(m.group(1))) - timedelta(days=1)
+                except: pass
+
+        # ── HOURLY PRODUCTIVITY TOTALS (πιο αξιόπιστη πηγή) ─────────────────
+        # "Totals: 10516,57  100.00  385  2,00  5258.29  192.50  27,32  4211"
+        #           sales     100%   cust  pos   amt/pos  c/pos  avg_bsk items
+        m = re.search(
+            r'[Tt]otals?\s*:?\s*([\d.,]{4,10})\s+100[.,]00\s+(\d{2,4})'
+            r'\s+[\d.,]+\s+[\d.,]+\s+[\d.,]+\s+([\d.,]{3,7})\s+\d+',
+            txt
+        )
+        if m:
+            ns  = _num(m.group(1))
+            cus = int(m.group(2))
+            ab  = _num(m.group(3))
+            if ns  and 2000 < ns  < 80000 and ns  not in [v for v in _NS_EXCLUDE]:
+                r["net_sales"]  = ns
+            if 50 < cus < 2000 and cus not in _YEAR_GUARD:
+                r["customers"]  = cus
+            if ab  and 5 < ab < 200:
+                r["avg_basket"] = ab
+
+        # ── DEPARTMENT REPORT KEYWORDS (backup) ─────────────────────────────
+        clean = re.sub(r'\s+', '', txt).upper()
+
+        if not r["net_sales"]:
+            # Εξαιρούμε τον αριθμό καταστήματος 1082 (false positive)
+            r["net_sales"] = _find(txt, [
+                r'NetDaySalDis\s+([\d.,]+)',
+                r'Ne[t7][Dd]ay[Ss]al[Dd][i1][s5]\s+([\d.,]+)',
+                r'Ne[i1]tDay[Ss]al[Dd][i1][s5]\s+([\d.,]+)',
+            ], lo=2000, hi=80000, exclude=_NS_EXCLUDE)
+
+        if not r["customers"]:
+            m = re.search(r'Num[O0]fCus\s+([\d.,\s]+)', txt, re.IGNORECASE)
             if m:
                 try:
-                    r["date"] = datetime.strptime(m.group(1).replace(".","/"), "%d/%m/%Y").date()
+                    raw = re.sub(r'[.,\s]', '', m.group(1).strip())
+                    v = int(raw)
+                    # Guard: αποκλείει χρονολογίες και unrealistic τιμές
+                    if 50 < v < 2000 and v not in _YEAR_GUARD:
+                        r["customers"] = v
+                except: pass
+
+        if not r["avg_basket"]:
+            r["avg_basket"] = _find(txt, [
+                r'AvgSalCus\s+([\d.,]+)',
+                r'Avg[Ss]a[il][Cc]us\s+([\d.,]+)',
+            ], lo=5, hi=200)
+
+        # ── SEQUENCE FALLBACK ────────────────────────────────────────────────
+        if r["net_sales"] and (not r["customers"] or not r["avg_basket"]):
+            nums = [v for x in re.findall(r'\d+[.,\d]*', txt)
+                    if (v := _num(x)) is not None]
+            for i, v in enumerate(nums):
+                if abs(v - r["net_sales"]) < 0.02:
+                    for j in range(i+1, min(i+15, len(nums))):
+                        nv = nums[j]
+                        if not r["customers"] and 50 < nv < 2000 and float(nv).is_integer() and int(nv) not in _YEAR_GUARD:
+                            r["customers"] = int(nv)
+                        elif r["customers"] and not r["avg_basket"] and 5 < nv < 200:
+                            r["avg_basket"] = nv; break
                     break
-                except: pass
-
-        r["net_sales"] = _find(txt, [
-            r'Ne[i1]tDay[Ss]al[Dd][i1][s5]\s+([\d.,]+)',
-            r'NetDay[Ss]al[Dd]is\s+([\d.,]+)',
-            r'Ne[i1][t7]Day.{0,3}al.{0,3}[i1][s5]\s+([\d.,]+)',
-        ], lo=1000, hi=50000)
-
-        if r["net_sales"] is None:
-            m = re.search(r'[Gg]roup[Tt]ot\s+([\d.,]+)\s+([\d.,]+)', txt)
-            if m:
-                try:
-                    v = _num(m.group(2))
-                    if 1000 <= v <= 50000: r["net_sales"] = v
-                except: pass
-
-        if r["net_sales"] is None:
-            m = re.search(r'[Tt]otals?\s*:?\s*([\d.,]+)\s+100[.,]00\s+([\d]+)', txt)
-            if m:
-                try:
-                    v = _num(m.group(1))
-                    if 1000 <= v <= 50000:
-                        r["net_sales"] = v
-                        cv = int(m.group(2))
-                        if r["customers"] is None and 10 <= cv <= 2000: r["customers"] = cv
-                except: pass
-
-        if r["customers"] is None:
-            for pat in [r'Num[O0]fCus\s+([\d,. ]+)', r'Num[O0]f[Cc]us\s+([\d,. ]+)', r'Num0fCus\s+([\d,. ]+)']:
-                m = re.search(pat, txt, re.IGNORECASE)
-                if m:
-                    try:
-                        v = int(m.group(1).replace(",","").replace(".","").replace(" ",""))
-                        if 10 <= v <= 2000: r["customers"] = v; break
-                    except: pass
-
-        r["avg_basket"] = _find(txt, [r'Avg[Ss]al[Cc]us\s+([\d.,]+)', r'AvgSal[Cc]us\s+([\d.,]+)'], lo=5, hi=500)
 
     except Exception: pass
     return r
@@ -222,11 +282,22 @@ def _is_valid(subj):
     s = (subj or "").upper()
     return SALES_SUBJECT_KW in s or "SKYROS" in s
 
-def fetch(pw, since: date | None = None, limit: int = 60):
+def fetch(pw, since: date | None = None, want_records: int = 60, email_scan_limit: int = 400):
+    """
+    Φέρνει email και κάνει OCR.
+    want_records: πόσες ΕΓΚΥΡΕΣ εγγραφές πωλήσεων θέλουμε (όχι emails!)
+    email_scan_limit: μέγιστο emails που θα ανοίξουμε συνολικά
+    
+    BUG FIX: Πριν το limit αφορούσε emails → αν 10 emails περιείχαν 5 άσχετα
+             έγγραφα, έβγαιναν μόνο 5 πωλήσεις.
+             Τώρα σκανάρει όσα emails χρειαστεί μέχρι να βρει want_records πωλήσεις.
+    """
     recs, errs, n = [], [], 0
     try:
         with MailBox("imap.gmail.com").login(SALES_EMAIL_USER, pw) as mb:
-            for msg in mb.fetch(AND(from_=SALES_EMAIL_SENDER), limit=limit, reverse=True, mark_seen=False):
+            for msg in mb.fetch(AND(from_=SALES_EMAIL_SENDER), limit=email_scan_limit, reverse=True, mark_seen=False):
+                if len(recs) >= want_records:
+                    break
                 d = msg.date.date() if msg.date else None
                 if since and d and d < since: continue
                 if not _is_valid(msg.subject): continue
@@ -279,6 +350,37 @@ def deep_scan(pw):
 # ── LOAD DATA ─────────────────────────────────────────────────────────────────
 df  = load_all()
 today = date.today()
+
+# ── AUTO-SYNC — ΠΟΤΕ ΔΕΝ ΚΟΙΜΑΤΑΙ ────────────────────────────────────────────
+# Τρέχει κάθε 25 λεπτά ανεξάρτητα από αλληλεπίδραση χρήστη.
+# Αν cache άδειο (π.χ. μετά redeploy) → full scan 35 ημερών.
+# Αν cache υπάρχει → incremental από τελευταία γνωστή ημέρα.
+import streamlit.components.v1 as _sc
+import time as _time
+
+_AUTO_MINS = 25
+_sc.html(
+    f'<script>setTimeout(()=>{{window.parent.location.reload();}},{_AUTO_MINS*60*1000});</script>',
+    height=0,
+)
+if "sales_sync_ts" not in st.session_state:
+    st.session_state.sales_sync_ts = 0
+
+if _SECRET_PW and (_time.time() - st.session_state.sales_sync_ts > _AUTO_MINS * 60):
+    st.session_state.sales_sync_ts = _time.time()
+    try:
+        if df.empty:
+            # Cache άδειο → φέρε τις τελευταίες 35 ημέρες
+            _ar, _, _ = fetch(_SECRET_PW, want_records=35, email_scan_limit=200)
+        else:
+            # Incremental: -2 μέρες για overlap (διορθώνει και ελαφριά λάθη)
+            _since = df["date"].max() - timedelta(days=2)
+            _ar, _, _ = fetch(_SECRET_PW, since=_since, want_records=7, email_scan_limit=50)
+        if _ar:
+            merge_in(_ar)
+            df = load_all()
+    except Exception:
+        pass  # Σιωπηλή αποτυχία — δεν σπάμε το UI
 
 # ── RENDER ────────────────────────────────────────────────────────────────────
 
@@ -397,7 +499,7 @@ with tab_update:
 
     if run_test and sales_pw:
         with st.spinner("Ανάγνωση των 10 τελευταίων email & OCR..."):
-            recs, errs, n_checked = fetch(sales_pw, since=None, limit=10)
+            recs, errs, n_checked = fetch(sales_pw, since=None, want_records=10, email_scan_limit=100)
             
         if errs:
             st.error(f"❌ Σφάλμα: {errs[0]}")
@@ -437,7 +539,7 @@ with tab_update:
         with st.spinner("Ανάγνωση πρόσφατων email & OCR..."):
             df_existing = load_cache()
             since_dt = (df_existing["date"].max() - timedelta(days=5)) if not df_existing.empty else None
-            recs, errs, n_checked = fetch(sales_pw, since=since_dt, limit=40)
+            recs, errs, n_checked = fetch(sales_pw, since=since_dt, want_records=30, email_scan_limit=150)
             
         if errs:
             st.error(f"❌ Σφάλμα: {errs[0]}")
