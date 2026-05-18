@@ -241,11 +241,10 @@ df    = load_sales()
 today = date.today()
 
 # ── AUTO-SYNC (κάθε 25 λεπτά) ────────────────────────────────────────────────
-import streamlit.components.v1 as _sc
 import time as _time
 
 _AUTO_MINS = 25
-_sc.html(f'<script>setTimeout(()=>{{window.parent.location.reload();}},{_AUTO_MINS*60*1000});</script>', height=0)
+st.html(f'<script>setTimeout(()=>{{window.parent.location.reload();}},{_AUTO_MINS*60*1000});</script>')
 
 if "sales_sync_ts" not in st.session_state:
     st.session_state.sales_sync_ts = 0
