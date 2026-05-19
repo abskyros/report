@@ -240,28 +240,9 @@ def deep_scan(pw):
 df    = load_sales()
 today = date.today()
 
-# ── AUTO-SYNC (κάθε 25 λεπτά) ────────────────────────────────────────────────
 import time as _time
-
-_AUTO_MINS = 25
-st.html(f'<script>setTimeout(()=>{{window.parent.location.reload();}},{_AUTO_MINS*60*1000});</script>')
-
-if "sales_sync_ts" not in st.session_state:
-    st.session_state.sales_sync_ts = 0
-
-if _SECRET_PW and (_time.time() - st.session_state.sales_sync_ts > _AUTO_MINS * 60):
-    st.session_state.sales_sync_ts = _time.time()
-    try:
-        if df.empty:
-            _ar, _, _ = fetch(_SECRET_PW, want_records=35, email_scan_limit=200)
-        else:
-            _since = df["date"].max() - timedelta(days=2)
-            _ar, _, _ = fetch(_SECRET_PW, since=_since, want_records=7, email_scan_limit=50)
-        if _ar:
-            merge_sales(_ar)
-            df = load_sales()
-    except Exception:
-        pass
+# Auto-sync αφαιρέθηκε — έκανε OCR στο page load και κολλούσε η σελίδα.
+# Ενημέρωση μόνο από την καρτέλα "Ενημέρωση".
 
 # ── RENDER ────────────────────────────────────────────────────────────────────
 st.markdown("""

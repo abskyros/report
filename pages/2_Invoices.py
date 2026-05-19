@@ -159,24 +159,9 @@ def get_week_range(d):
 df    = load_invoices()
 today = date.today()
 
-# ── AUTO-SYNC (κάθε 30 λεπτά) ────────────────────────────────────────────────
 import time as _time
-
-_AUTO_MINS = 30
-st.html(f'<script>setTimeout(()=>{{window.parent.location.reload();}},{_AUTO_MINS*60*1000});</script>')
-
-if "inv_sync_ts" not in st.session_state:
-    st.session_state.inv_sync_ts = 0
-
-if _SECRET_PW and (_time.time() - st.session_state.inv_sync_ts > _AUTO_MINS * 60):
-    st.session_state.inv_sync_ts = _time.time()
-    try:
-        _new_dfs, _, _ = fetch_invoices_incremental(_SECRET_PW, full_scan=False)
-        if _new_dfs:
-            merge_invoices(_new_dfs)
-            df = load_invoices()
-    except Exception:
-        pass
+# Auto-sync αφαιρέθηκε — έκανε IMAP requests στο page load.
+# Ενημέρωση μόνο από την καρτέλα "Ενημέρωση".
 
 # ── RENDER ────────────────────────────────────────────────────────────────────
 st.markdown("""
