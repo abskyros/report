@@ -16,28 +16,50 @@ SALES_SHEET    = "sales"
 INVOICES_SHEET = "invoices"
 
 
+# ── PEM FIX ───────────────────────────────────────────────────────────────────
+
+def _fix_pem(key: str) -> str:
+    """
+    Διορθώνει το private_key:
+    1. Literal \\n → πραγματικό newline
+    2. Αν το key είναι PKCS#8 αλλά έχει λανθασμένο 'BEGIN RSA PRIVATE KEY'
+       header, το αλλάζει σε 'BEGIN PRIVATE KEY' που είναι το σωστό.
+       (Το Google Cloud παράγει PKCS#8 keys — ο σωστός header είναι PRIVATE KEY)
+    """
+    key = key.strip().replace("\r\n", "\n").replace("\r", "\n")
+    if "\\n" in key:
+        key = key.replace("\\n", "\n")
+
+    # Διόρθωση header: RSA PRIVATE KEY → PRIVATE KEY για PKCS#8 keys
+    if "-----BEGIN RSA PRIVATE KEY-----" in key:
+        from cryptography.hazmat.primitives.serialization import load_pem_private_key
+        # Δοκίμασε το RSA header πρώτα
+        try:
+            load_pem_private_key(key.encode(), password=None)
+            # Δουλεύει → αφήνουμε ως έχει
+        except Exception:
+            # Δεν δουλεύει → δοκίμασε με PKCS#8 header
+            alt = (key
+                   .replace("-----BEGIN RSA PRIVATE KEY-----", "-----BEGIN PRIVATE KEY-----")
+                   .replace("-----END RSA PRIVATE KEY-----",   "-----END PRIVATE KEY-----"))
+            try:
+                load_pem_private_key(alt.encode(), password=None)
+                key = alt  # PKCS#8 header δουλεύει → χρησιμοποιούμε αυτό
+            except Exception:
+                pass  # Αφήνουμε ως έχει, το Google SDK θα δώσει καλύτερο μήνυμα
+
+    return key
+
+
 # ── CONNECTION ────────────────────────────────────────────────────────────────
 
 def _get_client():
-    """
-    Δημιουργεί gspread client κάθε φορά — αποφεύγει stale cache issues.
-    Χρησιμοποιεί gspread.service_account_from_dict() που χειρίζεται
-    σωστά το private_key ανεξάρτητα από τη μορφή \n.
-    """
-    info = {k: v for k, v in st.secrets["gcp_service_account"].items()}
+    """Fresh gspread client — χωρίς cache για αποφυγή stale connection errors."""
+    raw  = st.secrets["gcp_service_account"]
+    info = {k: v for k, v in raw.items()}
 
-    # Διόρθωση private_key: literal \n → πραγματικό newline
-    pk = str(info.get("private_key", ""))
-    pk = pk.replace("\\n", "\n")
-    # Αν ακόμα δεν έχει newlines, προσθέτουμε μετά τα headers
-    if "-----BEGIN" in pk and "\n" not in pk.replace("-----BEGIN RSA PRIVATE KEY-----", "").replace("-----END RSA PRIVATE KEY-----", "").replace("-----BEGIN PRIVATE KEY-----", "").replace("-----END PRIVATE KEY-----", ""):
-        pk = pk.replace("-----BEGIN RSA PRIVATE KEY-----", "-----BEGIN RSA PRIVATE KEY-----\n")
-        pk = pk.replace("-----END RSA PRIVATE KEY-----", "\n-----END RSA PRIVATE KEY-----")
-        pk = pk.replace("-----BEGIN PRIVATE KEY-----", "-----BEGIN PRIVATE KEY-----\n")
-        pk = pk.replace("-----END PRIVATE KEY-----", "\n-----END PRIVATE KEY-----")
-    info["private_key"] = pk
+    info["private_key"] = _fix_pem(str(info.get("private_key", "")))
 
-    # Βεβαιωνόμαστε ότι υπάρχουν τα απαραίτητα πεδία
     if "token_uri" not in info:
         info["token_uri"] = "https://oauth2.googleapis.com/token"
     if "type" not in info:
@@ -46,17 +68,10 @@ def _get_client():
     try:
         return gspread.service_account_from_dict(info)
     except Exception as e:
-        pk_preview = info.get("private_key","")[:100]
-        first_line = pk_preview.split("\n")[0]
-        raise RuntimeError(
-            f"Google Auth αποτυχία. "
-            f"private_key πρώτη γραμμή: '{first_line}' | "
-            f"Σφάλμα: {e}"
-        ) from e
+        raise RuntimeError(f"Google Auth αποτυχία: {e}") from e
 
 
 def _ws(sheet_name: str):
-    """Επιστρέφει το worksheet — fresh connection κάθε φορά."""
     return _get_client().open_by_key(st.secrets["SPREADSHEET_ID"]).worksheet(sheet_name)
 
 
@@ -64,7 +79,6 @@ def _ws(sheet_name: str):
 
 @st.cache_data(ttl=120)
 def load_sales() -> pd.DataFrame:
-    """Φορτώνει πωλήσεις. Cache 2 λεπτά."""
     try:
         rows = _ws(SALES_SHEET).get_all_records()
         if not rows:
@@ -126,7 +140,6 @@ def merge_sales(recs: list) -> int:
 
 @st.cache_data(ttl=120)
 def load_invoices() -> pd.DataFrame:
-    """Φορτώνει τιμολόγια. Cache 2 λεπτά."""
     try:
         rows = _ws(INVOICES_SHEET).get_all_records()
         if not rows:
