@@ -112,10 +112,11 @@ def _ocr_page(img):
         return t
     return pytesseract.image_to_string(img.rotate(90, expand=True), lang="ell+eng", config=cfg)
 
-def extract(pdf_bytes: bytes) -> dict:
+def extract(pdf_bytes: bytes, fast: bool = False) -> dict:
     r = {"date":None,"net_sales":None,"customers":None,"avg_basket":None}
     try:
-        images = convert_from_bytes(pdf_bytes, dpi=250, first_page=1, last_page=6)
+        dpi = 150 if fast else 250
+        images = convert_from_bytes(pdf_bytes, dpi=dpi, first_page=1, last_page=6)
         if not images: return r
         txt = "\n".join(_ocr_page(img) for img in images)
 
@@ -184,6 +185,23 @@ def extract(pdf_bytes: bytes) -> dict:
     return r
 
 # ── EMAIL FETCHING ─────────────────────────────────────────────────────────────
+def _fetch_with_progress(pw, want=5, limit=20):
+    """Generator για test mode: επεξεργάζεται ένα-ένα PDF και κάνει yield."""
+    count = 0
+    try:
+        with MailBox("imap.gmail.com").login(SALES_EMAIL_USER, pw) as mb:
+            for msg in mb.fetch(AND(from_=SALES_EMAIL_SENDER), limit=limit, reverse=True, mark_seen=False):
+                if count >= want: break
+                if not _is_valid(msg.subject): continue
+                pdf = next((a for a in msg.attachments if a.filename and a.filename.lower().endswith(".pdf")), None)
+                if not pdf: continue
+                count += 1
+                rec = extract(pdf.payload, fast=True)  # fast=True → DPI 150
+                yield rec if (rec["date"] and rec["net_sales"]) else None, None, 1
+    except Exception as e:
+        yield None, str(e), 0
+
+
 def _is_valid(subj):
     s = (subj or "").upper()
     return SALES_SUBJECT_KW in s or "SKYROS" in s
@@ -356,8 +374,15 @@ with tab_update:
     run_full = col_full.button("🔍 Βαθιά (2 χρόνια)",     use_container_width=True)
 
     if run_test and sales_pw:
-        with st.spinner("Ανάγνωση των 10 τελευταίων email & OCR..."):
-            recs, errs, n_checked = fetch(sales_pw, since=None, want_records=10, email_scan_limit=100)
+        st.markdown('<div class="warn-box">⏳ Δοκιμή σε εξέλιξη — κάθε PDF παίρνει ~20-40 δευτερόλεπτα για OCR...</div>', unsafe_allow_html=True)
+        prog_test = st.empty()
+        recs, errs, n_checked = [], [], 0
+        for i, (rec, err, n) in enumerate(_fetch_with_progress(sales_pw, want=5, limit=20)):
+            n_checked += n
+            if err: errs.append(err); break
+            if rec: recs.append(rec)
+            prog_test.markdown(f'<div class="prog-wrap"><div class="prog-title">OCR PDF {i+1}/5...</div><div class="prog-sub">Βρέθηκαν {len(recs)} εγγραφές μέχρι τώρα</div></div>', unsafe_allow_html=True)
+        prog_test.empty()
         if errs:
             st.error(f"❌ Σφάλμα: {errs[0]}")
         else:
