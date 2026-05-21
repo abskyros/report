@@ -191,7 +191,17 @@ def fetch_invoices_incremental(password, full_scan=False, debug=False):
                     df_parsed["VALUE"] = pd.to_numeric(df_parsed["VALUE"], errors="coerce")
                     df_parsed = df_parsed.dropna(subset=["DATE","VALUE"])
 
-                    # Φίλτρο: αφαίρεσε αρνητικές και μηδενικές τιμές
+                    # Αυτόματη μετατροπή cents → ευρώ:
+                    # Τα email αρχεία WeDoConnect αποθηκεύουν τιμές ως ακέραιους (π.χ. 333459 = 3334,59€)
+                    # Αν η τιμή είναι ακέραιος (χωρίς δεκαδικά) → διαιρούμε με 100
+                    def cents_to_euros(v):
+                        if pd.isna(v): return v
+                        if v == int(v) and v > 0:   # ακέραιος → cents
+                            return v / 100
+                        return v                    # ήδη σε ευρώ
+                    df_parsed["VALUE"] = df_parsed["VALUE"].apply(cents_to_euros)
+
+                    # Φίλτρο: αφαίρεσε αρνητικές/μηδενικές
                     df_parsed = df_parsed[df_parsed["VALUE"] > 0]
 
                     if not df_parsed.empty:
