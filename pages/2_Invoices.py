@@ -60,12 +60,18 @@ def fmt(v):
 # ── SMART COLUMN DETECTION ───────────────────────────────────────────────────
 # Προτεραιότητα στηλών για ΑΞΙΑ (από πιο ειδική → πιο γενική)
 # Αποφεύγουμε στήλες που περιέχουν ΦΠΑ, ΣΥΝΟΛΟ, ΠΛΗΡΩΤΕΑκτλ
+# Προτεραιότητα: πρώτα ειδικές ονομασίες, μετά γενικές
 _VALUE_PRIORITY = [
-    "ΚΑΘΑΡΗ ΑΞΙΑ", "ΚΑΘΑΡΑ ΑΞΙΑ", "ΑΞΙΑ ΑΓΑΘΩΝ", "ΑΞΙΑ ΥΠΗΡΕΣΙΩΝ",
-    "ΑΞΙΑ ΠΑΡΑΣΤΑΤΙΚΟΥ", "ΑΞΙΑ ΤΙΜΟΛΟΓΙΟΥ", "ΑΞΙΑ ΧΩΡΙΣ ΦΠΑ",
-    "NET AMOUNT", "NET VALUE", "ΑΞΙΑ",
+    "ΣΥΝΟΛΙΚΗ ΑΞΙΑ",      # WeDoConnect format
+    "ΚΑΘΑΡΗ ΑΞΙΑ", "ΚΑΘΑΡΑ ΑΞΙΑ",
+    "ΑΞΙΑ ΑΓΑΘΩΝ", "ΑΞΙΑ ΥΠΗΡΕΣΙΩΝ",
+    "ΑΞΙΑ ΠΑΡΑΣΤΑΤΙΚΟΥ", "ΑΞΙΑ ΤΙΜΟΛΟΓΙΟΥ",
+    "ΑΞΙΑ ΧΩΡΙΣ ΦΠΑ", "NET AMOUNT", "NET VALUE",
+    "ΑΞΙΑ",
 ]
-_VALUE_EXCLUDE = ["ΦΠΑ", "ΣΥΝΟΛ", "ΠΛΗΡΩΤ", "ΕΚΠΤΩΣ", "VAT", "TOTAL"]
+# Αποκλεισμός στηλών που ΔΕΝ είναι η κύρια αξία
+# ΣΗΜΑΝΤΙΚΟ: ΔΕΝ αποκλείουμε "ΣΥΝΟΛ" γενικά γιατί "ΣΥΝΟΛΙΚΗ ΑΞΙΑ" είναι σωστή
+_VALUE_EXCLUDE = ["ΑΞΙΑ ΦΠΑ", "ΠΛΗΡΩΤ", "ΕΚΠΤΩΣ", "VAT AMOUNT", "ΦΟΡΟΣ"]
 
 def _pick_value_col(columns: list) -> str | None:
     """
@@ -108,7 +114,7 @@ def find_header_and_load(file_content, filename):
         for i in range(min(40, len(df_raw))):
             row_values = [str(x).upper() for x in df_raw.iloc[i].values if pd.notna(x)]
             row_str = " ".join(row_values)
-            if "ΤΥΠΟΣ" in row_str and "ΗΜΕΡΟΜΗΝΙΑ" in row_str:
+            if ("ΤΥΠΟΣ" in row_str and "ΗΜΕΡΟΜΗΝΙΑ" in row_str) or                ("ΤΥΠΟΣ ΠΑΡΑΣΤΑΤΙΚΟΥ" in row_str):
                 header_row_index = i; break
 
         if header_row_index == -1: return None, []
@@ -166,7 +172,7 @@ def fetch_invoices_incremental(password, full_scan=False, debug=False):
                     # Χαρτογράφηση στηλών
                     col_map = {}
                     for c in df_parsed.columns:
-                        cu = c.upper()
+                        cu = c.strip().upper()
                         if "ΤΥΠΟΣ" in cu:       col_map[c] = "TYPE"
                         elif "ΗΜΕΡΟΜΗΝΙΑ" in cu: col_map[c] = "DATE"
 
@@ -185,8 +191,7 @@ def fetch_invoices_incremental(password, full_scan=False, debug=False):
                     df_parsed["VALUE"] = pd.to_numeric(df_parsed["VALUE"], errors="coerce")
                     df_parsed = df_parsed.dropna(subset=["DATE","VALUE"])
 
-                    # Φίλτρο: αφαίρεσε γραμμές σύνοψης / υπολοίπου (VALUE > 500.000)
-                    df_parsed = df_parsed[df_parsed["VALUE"] <= 500_000]
+                    # Φίλτρο: αφαίρεσε αρνητικές και μηδενικές τιμές
                     df_parsed = df_parsed[df_parsed["VALUE"] > 0]
 
                     if not df_parsed.empty:
@@ -245,10 +250,10 @@ with tab_week:
               <div class="kc" style="--a:#5a9f7a"><div class="kl">Καθαρό Σύνολο</div><div class="kv kv-green">{fmt(net_w)}</div></div>
             </div>""", unsafe_allow_html=True)
             disp = w_df.copy()
-            disp["DATE"] = disp["DATE"].dt.strftime("%d/%m/%Y %H:%M")
+            disp["DATE"]  = disp["DATE"].dt.strftime("%d/%m/%Y")
+            disp["VALUE"] = disp["VALUE"].apply(fmt)
             st.dataframe(
-                disp.rename(columns={"DATE":"ΗΜΕΡΟΜΗΝΙΑ","TYPE":"ΤΥΠΟΣ","VALUE":"ΑΞΙΑ"})
-                    .style.format({"ΑΞΙΑ": "{:.2f} €"}),
+                disp.rename(columns={"DATE":"ΗΜΕΡΟΜΗΝΙΑ","TYPE":"ΤΥΠΟΣ","VALUE":"ΑΞΙΑ"}),
                 use_container_width=True, hide_index=True)
         else:
             st.markdown('<div class="warn-box">Δεν υπάρχουν εγγραφές για αυτή την εβδομάδα.</div>', unsafe_allow_html=True)
@@ -275,10 +280,10 @@ with tab_month:
               <div class="kc" style="--a:#5a9f7a"><div class="kl">Καθαρό Μήνα</div><div class="kv kv-green">{fmt(net_m)}</div></div>
             </div>""", unsafe_allow_html=True)
             disp = m_df.copy()
-            disp["DATE"] = disp["DATE"].dt.strftime("%d/%m/%Y %H:%M")
+            disp["DATE"]  = disp["DATE"].dt.strftime("%d/%m/%Y")
+            disp["VALUE"] = disp["VALUE"].apply(fmt)
             st.dataframe(
-                disp.rename(columns={"DATE":"ΗΜΕΡΟΜΗΝΙΑ","TYPE":"ΤΥΠΟΣ","VALUE":"ΑΞΙΑ"})
-                    .style.format({"ΑΞΙΑ": "{:.2f} €"}),
+                disp.rename(columns={"DATE":"ΗΜΕΡΟΜΗΝΙΑ","TYPE":"ΤΥΠΟΣ","VALUE":"ΑΞΙΑ"}),
                 use_container_width=True, hide_index=True)
             csv = m_df.rename(columns={"DATE":"ΗΜΕΡΟΜΗΝΙΑ","TYPE":"ΤΥΠΟΣ","VALUE":"ΑΞΙΑ"}).to_csv(index=False).encode("utf-8-sig")
             st.download_button(f"📥 Λήψη {MONTHS_GR[s_m-1]} {s_y} CSV", csv, f"invoices_{s_y}_{s_m:02d}.csv", "text/csv")

@@ -369,7 +369,7 @@ with tab_update:
         sales_pw = st.text_input("🔐 Gmail App Password", type="password", key="sales_pw")
 
     col_test, col_inc, col_full = st.columns(3)
-    run_test = col_test.button("🧪 Δοκιμή (10 Τελευταία)", use_container_width=True)
+    run_test = col_test.button("🧪 Δοκιμή (5 Τελευταία)", use_container_width=True)
     run_inc  = col_inc.button("⚡ Γρήγορη (Νέα μόνο)",    use_container_width=True)
     run_full = col_full.button("🔍 Βαθιά (2 χρόνια)",     use_container_width=True)
 
