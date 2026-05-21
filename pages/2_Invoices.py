@@ -57,46 +57,11 @@ def fmt(v):
     return f"{v:,.2f}€".replace(",","X").replace(".",",").replace("X",".")
 
 
-# ── SMART COLUMN DETECTION ───────────────────────────────────────────────────
-# Προτεραιότητα στηλών για ΑΞΙΑ (από πιο ειδική → πιο γενική)
-# Αποφεύγουμε στήλες που περιέχουν ΦΠΑ, ΣΥΝΟΛΟ, ΠΛΗΡΩΤΕΑκτλ
-# Προτεραιότητα: πρώτα ειδικές ονομασίες, μετά γενικές
-_VALUE_PRIORITY = [
-    "ΣΥΝΟΛΙΚΗ ΑΞΙΑ",      # WeDoConnect format
-    "ΚΑΘΑΡΗ ΑΞΙΑ", "ΚΑΘΑΡΑ ΑΞΙΑ",
-    "ΑΞΙΑ ΑΓΑΘΩΝ", "ΑΞΙΑ ΥΠΗΡΕΣΙΩΝ",
-    "ΑΞΙΑ ΠΑΡΑΣΤΑΤΙΚΟΥ", "ΑΞΙΑ ΤΙΜΟΛΟΓΙΟΥ",
-    "ΑΞΙΑ ΧΩΡΙΣ ΦΠΑ", "NET AMOUNT", "NET VALUE",
-    "ΑΞΙΑ",
-]
-# Αποκλεισμός στηλών που ΔΕΝ είναι η κύρια αξία
-# ΣΗΜΑΝΤΙΚΟ: ΔΕΝ αποκλείουμε "ΣΥΝΟΛ" γενικά γιατί "ΣΥΝΟΛΙΚΗ ΑΞΙΑ" είναι σωστή
-_VALUE_EXCLUDE = ["ΑΞΙΑ ΦΠΑ", "ΠΛΗΡΩΤ", "ΕΚΠΤΩΣ", "VAT AMOUNT", "ΦΟΡΟΣ"]
+# ── COLUMN DETECTION (same as original working app) ─────────────────────────
 
 def _pick_value_col(columns: list) -> str | None:
-    """
-    Επιλέγει τη σωστή στήλη αξίας με σειρά προτεραιότητας.
-    Αποφεύγει στήλες ΦΠΑ, ΣΥΝΟΛΟ, ΠΛΗΡΩΤΕΑ.
-    """
-    cols_upper = {c.upper(): c for c in columns}
-
-    # 1. Ακριβής αντιστοίχηση με λίστα προτεραιότητας
-    for priority in _VALUE_PRIORITY:
-        for cu, c_orig in cols_upper.items():
-            if priority in cu and not any(exc in cu for exc in _VALUE_EXCLUDE):
-                return c_orig
-
-    # 2. Fallback: οποιαδήποτε στήλη με ΑΞΙΑ χωρίς ΦΠΑ/ΣΥΝΟΛΟ
-    for cu, c_orig in cols_upper.items():
-        if "ΑΞΙΑ" in cu and not any(exc in cu for exc in _VALUE_EXCLUDE):
-            return c_orig
-
-    # 3. Τελευταία λύση: ΠΟΣΟ ή VALUE
-    for cu, c_orig in cols_upper.items():
-        if ("ΠΟΣΟ" in cu or "VALUE" in cu or "AMOUNT" in cu) and not any(exc in cu for exc in _VALUE_EXCLUDE):
-            return c_orig
-
-    return None
+    """Βρίσκει τη στήλη αξίας: ψάχνει για ΑΞΙΑ ή ΣΥΝΟΛΟ (όπως το original)."""
+    return next((c for c in columns if "ΑΞΙΑ" in c.upper() or "ΣΥΝΟΛΟ" in c.upper()), None)
 
 
 def find_header_and_load(file_content, filename):
@@ -170,38 +135,25 @@ def fetch_invoices_incremental(password, full_scan=False, debug=False):
                         debug_cols[att.filename] = all_cols
 
                     # Χαρτογράφηση στηλών
-                    col_map = {}
-                    for c in df_parsed.columns:
-                        cu = c.strip().upper()
-                        if "ΤΥΠΟΣ" in cu:       col_map[c] = "TYPE"
-                        elif "ΗΜΕΡΟΜΗΝΙΑ" in cu: col_map[c] = "DATE"
+                    # Εύρεση στηλών (ίδια λογική με original working app)
+                    col_date  = next((c for c in df_parsed.columns if "ΗΜΕΡΟΜΗΝΙΑ" in c.upper()), None)
+                    col_type  = next((c for c in df_parsed.columns if "ΤΥΠΟΣ" in c.upper()), None)
+                    col_value = _pick_value_col(list(df_parsed.columns))
 
-                    # Έξυπνη επιλογή στήλης αξίας
-                    val_col = _pick_value_col(list(df_parsed.columns))
-                    if val_col:
-                        col_map[val_col] = "VALUE"
-
-                    df_parsed = df_parsed.rename(columns=col_map)
-
-                    if not all(c in df_parsed.columns for c in ["DATE","TYPE","VALUE"]):
+                    if not all([col_date, col_type, col_value]):
                         continue
 
-                    df_parsed = df_parsed[["DATE","TYPE","VALUE"]].copy()
-                    df_parsed["DATE"]  = pd.to_datetime(df_parsed["DATE"], errors="coerce", dayfirst=True)
-                    df_parsed["VALUE"] = pd.to_numeric(df_parsed["VALUE"], errors="coerce")
-                    df_parsed = df_parsed.dropna(subset=["DATE","VALUE"])
-
-                    # Αυτόματη μετατροπή cents → ευρώ:
-                    # Τα email αρχεία WeDoConnect αποθηκεύουν τιμές ως ακέραιους (π.χ. 333459 = 3334,59€)
-                    # Αν η τιμή είναι ακέραιος (χωρίς δεκαδικά) → διαιρούμε με 100
-                    def cents_to_euros(v):
-                        if pd.isna(v): return v
-                        if v == int(v) and v > 0:   # ακέραιος → cents
-                            return v / 100
-                        return v                    # ήδη σε ευρώ
-                    df_parsed["VALUE"] = df_parsed["VALUE"].apply(cents_to_euros)
-
-                    # Φίλτρο: αφαίρεσε αρνητικές/μηδενικές
+                    df_parsed = df_parsed[[col_date, col_type, col_value]].copy()
+                    df_parsed.columns = ["DATE", "TYPE", "VALUE"]
+                    df_parsed["DATE"] = pd.to_datetime(df_parsed["DATE"], errors="coerce", dayfirst=True)
+                    # Ακριβώς η ίδια λογική με το original working app:
+                    if df_parsed["VALUE"].dtype == object:
+                        df_parsed["VALUE"] = (df_parsed["VALUE"].astype(str)
+                                              .str.replace("€", "", regex=False)
+                                              .str.replace(",", ".", regex=False)
+                                              .str.strip())
+                    df_parsed["VALUE"] = pd.to_numeric(df_parsed["VALUE"], errors="coerce").fillna(0)
+                    df_parsed = df_parsed.dropna(subset=["DATE"])
                     df_parsed = df_parsed[df_parsed["VALUE"] > 0]
 
                     if not df_parsed.empty:
