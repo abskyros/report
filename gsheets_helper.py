@@ -19,52 +19,35 @@ INVOICES_SHEET = "invoices"
 # ── PEM FIX ───────────────────────────────────────────────────────────────────
 
 def _fix_pem(key: str) -> str:
-    """
-    Διορθώνει το private_key:
-    1. Literal \\n → πραγματικό newline
-    2. Αν το key είναι PKCS#8 αλλά έχει λανθασμένο 'BEGIN RSA PRIVATE KEY'
-       header, το αλλάζει σε 'BEGIN PRIVATE KEY' που είναι το σωστό.
-       (Το Google Cloud παράγει PKCS#8 keys — ο σωστός header είναι PRIVATE KEY)
-    """
     key = key.strip().replace("\r\n", "\n").replace("\r", "\n")
     if "\\n" in key:
         key = key.replace("\\n", "\n")
-
-    # Διόρθωση header: RSA PRIVATE KEY → PRIVATE KEY για PKCS#8 keys
     if "-----BEGIN RSA PRIVATE KEY-----" in key:
         from cryptography.hazmat.primitives.serialization import load_pem_private_key
-        # Δοκίμασε το RSA header πρώτα
         try:
             load_pem_private_key(key.encode(), password=None)
-            # Δουλεύει → αφήνουμε ως έχει
         except Exception:
-            # Δεν δουλεύει → δοκίμασε με PKCS#8 header
             alt = (key
                    .replace("-----BEGIN RSA PRIVATE KEY-----", "-----BEGIN PRIVATE KEY-----")
                    .replace("-----END RSA PRIVATE KEY-----",   "-----END PRIVATE KEY-----"))
             try:
                 load_pem_private_key(alt.encode(), password=None)
-                key = alt  # PKCS#8 header δουλεύει → χρησιμοποιούμε αυτό
+                key = alt
             except Exception:
-                pass  # Αφήνουμε ως έχει, το Google SDK θα δώσει καλύτερο μήνυμα
-
+                pass
     return key
 
 
 # ── CONNECTION ────────────────────────────────────────────────────────────────
 
 def _get_client():
-    """Fresh gspread client — χωρίς cache για αποφυγή stale connection errors."""
     raw  = st.secrets["gcp_service_account"]
     info = {k: v for k, v in raw.items()}
-
     info["private_key"] = _fix_pem(str(info.get("private_key", "")))
-
     if "token_uri" not in info:
         info["token_uri"] = "https://oauth2.googleapis.com/token"
     if "type" not in info:
         info["type"] = "service_account"
-
     try:
         return gspread.service_account_from_dict(info)
     except Exception as e:
@@ -73,15 +56,34 @@ def _get_client():
 
 def _ws(sheet_name: str):
     """
-    Επιστρέφει το worksheet. Αν δεν υπάρχει tab με αυτό το όνομα,
-    το δημιουργεί αυτόματα αντί να κάνει crash με Response [404].
+    Ανοίγει το worksheet. Αν το spreadsheet δεν βρεθεί (404),
+    εμφανίζει χρήσιμο μήνυμα με το ID που ψάχνει και τις οδηγίες.
     """
-    spreadsheet = _get_client().open_by_key(st.secrets["SPREADSHEET_ID"])
-    # Ψάχνουμε case-insensitive για ανθεκτικότητα
+    sid = st.secrets.get("SPREADSHEET_ID", "ΔΕΝ ΟΡΙΣΤΗΚΕ")
+    try:
+        spreadsheet = _get_client().open_by_key(sid)
+    except gspread.exceptions.APIError as e:
+        if "404" in str(e) or "NOT_FOUND" in str(e).upper():
+            st.error(
+                f"❌ **Google Sheet δεν βρέθηκε!**\n\n"
+                f"Το SPREADSHEET_ID που χρησιμοποιείται: `{sid}`\n\n"
+                f"**Λύση — έλεγξε 2 πράγματα:**\n"
+                f"1. Το SPREADSHEET_ID στα Streamlit Secrets είναι **λάθος ή placeholder**. "
+                f"Πήγαινε στο Google Sheet σου, κοίτα το URL και αντιγραφε το σωστό ID.\n"
+                f"2. Το Sheet δεν έχει **Share** με το service account email "
+                f"(`{st.secrets.get('gcp_service_account', {}).get('client_email', '???')}`). "
+                f"Άνοιξε το Sheet → Share → επικόλλησε αυτό το email → Editor."
+            )
+            raise
+        raise
+    except Exception as e:
+        st.error(f"❌ Σφάλμα σύνδεσης Google Sheets (ID: `{sid}`): {e}")
+        raise
+
     existing = {ws.title.lower(): ws for ws in spreadsheet.worksheets()}
     if sheet_name.lower() in existing:
         return existing[sheet_name.lower()]
-    # Tab δεν υπάρχει → το δημιουργούμε με headers
+    # Tab δεν υπάρχει → το δημιουργούμε αυτόματα
     ws = spreadsheet.add_worksheet(title=sheet_name, rows=2000, cols=20)
     if sheet_name == SALES_SHEET:
         ws.update([["date","net_sales","customers","avg_basket"]])
@@ -92,7 +94,7 @@ def _ws(sheet_name: str):
 
 # ── SALES ─────────────────────────────────────────────────────────────────────
 
-@st.cache_data(ttl=120)
+@st.cache_data(ttl=30)
 def load_sales() -> pd.DataFrame:
     try:
         rows = _ws(SALES_SHEET).get_all_records()
@@ -126,13 +128,6 @@ def _save_sales(df: pd.DataFrame):
 
 
 def merge_sales(recs: list) -> int:
-    """
-    Αποθηκεύει νέες εγγραφές χωρίς να ξαναγράφει ό,τι είναι ήδη σωστό.
-    Κάνει update μόνο αν:
-    • Η ημερομηνία είναι νέα
-    • Ο νέος OCR βρήκε μεγαλύτερο net_sales (πιο αξιόπιστο)
-    • Το παλιό customers ήταν προφανώς λάθος (< 50 ή ratio > 2.5x)
-    """
     if not recs:
         return 0
     ndf = pd.DataFrame(recs)
@@ -152,15 +147,12 @@ def merge_sales(recs: list) -> int:
         else:
             row = ex.iloc[0]
             needs_update = False
-            # Καλύτερος τζίρος
             if pd.notna(r["net_sales"]) and r["net_sales"] > row["net_sales"]:
                 needs_update = True
-            # Διόρθωση customers αν ήταν λάθος OCR
             new_c = r.get("customers"); old_c = row.get("customers")
             if pd.notna(new_c) and new_c > 0:
                 if pd.isna(old_c) or old_c < 50 or (old_c > 0 and (new_c/old_c > 2.5 or new_c/old_c < 0.4)):
                     needs_update = True
-            # Διόρθωση avg_basket αν έλειπε
             new_a = r.get("avg_basket"); old_a = row.get("avg_basket")
             if pd.notna(new_a) and new_a > 0 and (pd.isna(old_a) or old_a < 5):
                 needs_update = True
@@ -174,7 +166,6 @@ def merge_sales(recs: list) -> int:
 
 
 def already_known_sale_dates() -> set:
-    """Ημερομηνίες που είναι ήδη αποθηκευμένες σωστά (net_sales>2000 & customers>50)."""
     df = load_sales()
     if df.empty: return set()
     good = df[(df["net_sales"] > 2000) & (df["customers"].fillna(0) > 50)]
@@ -183,7 +174,7 @@ def already_known_sale_dates() -> set:
 
 # ── INVOICES ──────────────────────────────────────────────────────────────────
 
-@st.cache_data(ttl=120)
+@st.cache_data(ttl=30)
 def load_invoices() -> pd.DataFrame:
     try:
         rows = _ws(INVOICES_SHEET).get_all_records()
