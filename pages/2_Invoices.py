@@ -242,7 +242,15 @@ with tab_week:
     if df.empty:
         st.markdown('<div class="warn-box">⚠️ Δεν υπάρχουν δεδομένα. Μεταβείτε στην καρτέλα <b>Ενημέρωση</b>.</div>', unsafe_allow_html=True)
     else:
-        sel_date = st.date_input("Επίλεξε ημέρα για εβδομάδα:", today)
+        col_r1, col_r2 = st.columns([4,1])
+        with col_r1:
+            sel_date = st.date_input("Επίλεξε ημέρα για εβδομάδα:", today)
+        with col_r2:
+            st.markdown("<div style='margin-top:28px'>", unsafe_allow_html=True)
+            if st.button("🔄", help="Ανανέωση δεδομένων", key="ref_w"):
+                load_invoices.clear()
+                st.rerun()
+            st.markdown("</div>", unsafe_allow_html=True)
         ws_dt    = datetime.combine(sel_date, datetime.min.time())
         start_w, end_w = get_week_range(ws_dt)
         st.markdown(f'<div class="info-box">📅 Εβδομάδα: <b>{start_w.strftime("%d/%m/%Y")}</b> — <b>{end_w.strftime("%d/%m/%Y")}</b></div>', unsafe_allow_html=True)
@@ -272,12 +280,18 @@ with tab_month:
     if df.empty:
         st.markdown('<div class="warn-box">⚠️ Δεν υπάρχουν δεδομένα.</div>', unsafe_allow_html=True)
     else:
-        col_a, col_b = st.columns(2)
+        col_a, col_b, col_c = st.columns([3,2,1])
         with col_a:
             s_m = st.selectbox("Μήνας", range(1,13), format_func=lambda x: MONTHS_GR[x-1], index=today.month-1)
         with col_b:
             available_years = sorted(df["DATE"].dt.year.unique(), reverse=True)
             s_y = st.selectbox("Έτος", available_years)
+        with col_c:
+            st.markdown("<div style='margin-top:28px'>", unsafe_allow_html=True)
+            if st.button("🔄", help="Ανανέωση δεδομένων", key="ref_m"):
+                load_invoices.clear()
+                st.rerun()
+            st.markdown("</div>", unsafe_allow_html=True)
         mask_m = (df["DATE"].dt.month == s_m) & (df["DATE"].dt.year == s_y)
         m_df   = df[mask_m]
         if not m_df.empty:
@@ -327,6 +341,7 @@ with tab_update:
             st.markdown(f'<div class="info-box">✅ Ελέγχθηκαν {checked} emails — δεν βρέθηκαν νέα δεδομένα.</div>', unsafe_allow_html=True)
         else:
             n_new = merge_invoices(new_dfs)
+            load_invoices.clear()  # Καθαρισμός cache αμέσως
             st.success(f"✅ Ενημερώθηκε! {n_new} νέες γραμμές από {checked} emails — αποθηκεύτηκαν στο Google Sheets.")
             st.rerun()
 
