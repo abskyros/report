@@ -72,7 +72,22 @@ def _get_client():
 
 
 def _ws(sheet_name: str):
-    return _get_client().open_by_key(st.secrets["SPREADSHEET_ID"]).worksheet(sheet_name)
+    """
+    Επιστρέφει το worksheet. Αν δεν υπάρχει tab με αυτό το όνομα,
+    το δημιουργεί αυτόματα αντί να κάνει crash με Response [404].
+    """
+    spreadsheet = _get_client().open_by_key(st.secrets["SPREADSHEET_ID"])
+    # Ψάχνουμε case-insensitive για ανθεκτικότητα
+    existing = {ws.title.lower(): ws for ws in spreadsheet.worksheets()}
+    if sheet_name.lower() in existing:
+        return existing[sheet_name.lower()]
+    # Tab δεν υπάρχει → το δημιουργούμε με headers
+    ws = spreadsheet.add_worksheet(title=sheet_name, rows=2000, cols=20)
+    if sheet_name == SALES_SHEET:
+        ws.update([["date","net_sales","customers","avg_basket"]])
+    elif sheet_name == INVOICES_SHEET:
+        ws.update([["DATE","TYPE","VALUE"]])
+    return ws
 
 
 # ── SALES ─────────────────────────────────────────────────────────────────────
@@ -111,6 +126,13 @@ def _save_sales(df: pd.DataFrame):
 
 
 def merge_sales(recs: list) -> int:
+    """
+    Αποθηκεύει νέες εγγραφές χωρίς να ξαναγράφει ό,τι είναι ήδη σωστό.
+    Κάνει update μόνο αν:
+    • Η ημερομηνία είναι νέα
+    • Ο νέος OCR βρήκε μεγαλύτερο net_sales (πιο αξιόπιστο)
+    • Το παλιό customers ήταν προφανώς λάθος (< 50 ή ratio > 2.5x)
+    """
     if not recs:
         return 0
     ndf = pd.DataFrame(recs)
@@ -127,13 +149,36 @@ def merge_sales(recs: list) -> int:
         if ex.empty:
             base    = pd.concat([base, r.to_frame().T], ignore_index=True)
             changed += 1
-        elif r["net_sales"] > ex.iloc[0]["net_sales"]:
-            base    = base[base["date"] != r["date"]]
-            base    = pd.concat([base, r.to_frame().T], ignore_index=True)
-            changed += 1
+        else:
+            row = ex.iloc[0]
+            needs_update = False
+            # Καλύτερος τζίρος
+            if pd.notna(r["net_sales"]) and r["net_sales"] > row["net_sales"]:
+                needs_update = True
+            # Διόρθωση customers αν ήταν λάθος OCR
+            new_c = r.get("customers"); old_c = row.get("customers")
+            if pd.notna(new_c) and new_c > 0:
+                if pd.isna(old_c) or old_c < 50 or (old_c > 0 and (new_c/old_c > 2.5 or new_c/old_c < 0.4)):
+                    needs_update = True
+            # Διόρθωση avg_basket αν έλειπε
+            new_a = r.get("avg_basket"); old_a = row.get("avg_basket")
+            if pd.notna(new_a) and new_a > 0 and (pd.isna(old_a) or old_a < 5):
+                needs_update = True
+            if needs_update:
+                base    = base[base["date"] != r["date"]]
+                base    = pd.concat([base, r.to_frame().T], ignore_index=True)
+                changed += 1
     if changed > 0:
         _save_sales(base)
     return changed
+
+
+def already_known_sale_dates() -> set:
+    """Ημερομηνίες που είναι ήδη αποθηκευμένες σωστά (net_sales>2000 & customers>50)."""
+    df = load_sales()
+    if df.empty: return set()
+    good = df[(df["net_sales"] > 2000) & (df["customers"].fillna(0) > 50)]
+    return set(good["date"].tolist())
 
 
 # ── INVOICES ──────────────────────────────────────────────────────────────────
