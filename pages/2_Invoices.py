@@ -277,46 +277,61 @@ with tab_update:
         st.markdown('<div class="warn-box">⚠️ Δεν βρέθηκε <b>EMAIL_PASS</b> στα Secrets.</div>', unsafe_allow_html=True)
         inv_pw = st.text_input("🔐 Gmail App Password", type="password", key="inv_pw")
 
-    col_inc, col_full, col_dbg = st.columns(3)
-    run_inc  = col_inc.button("⚡ Γρήγορη (Νέα μόνο)",   use_container_width=True)
-    run_full = col_full.button("🔍 Βαθιά Σάρωση (2 χρ.)", use_container_width=True)
-    run_dbg  = col_dbg.button("🔎 Διαγνωστικό",           use_container_width=True,
-                               help="Δείχνει ονόματα στηλών Excel χωρίς αποθήκευση")
+    col_inc, col_full = st.columns(2)
+    run_inc   = col_inc.button("⚡ Γρήγορη (Νέα μόνο)",              use_container_width=True)
+    run_fresh = col_full.button("🗑️ Καθαρισμός + Πλήρης Επαναφόρτωση", use_container_width=True,
+                                 help="Σβήνει ΟΛΑ τα παλιά δεδομένα και ξαναδιαβάζει από 0")
 
-    if (run_inc or run_full) and inv_pw:
-        lbl = "Βαθιά σάρωση 2 ετών..." if run_full else "Φόρτωση νέων emails..."
-        with st.spinner(lbl):
-            new_dfs, errs, checked, _ = fetch_invoices_incremental(inv_pw, full_scan=run_full)
+    if run_fresh and inv_pw:
+        st.markdown('<div class="warn-box">⏳ Σβήνω παλιά δεδομένα και φορτώνω εκ νέου...</div>', unsafe_allow_html=True)
+        prog = st.progress(0)
+        status = st.empty()
+
+        # Βήμα 1: Διαβάζουμε ΟΛΑ τα emails
+        status.markdown('<div class="info-box">📧 Σύνδεση & ανάγνωση emails (2 χρόνια)...</div>', unsafe_allow_html=True)
+        new_dfs, errs, checked, _ = fetch_invoices_incremental(inv_pw, full_scan=True)
+        prog.progress(50)
+
+        if errs:
+            st.error(f"❌ Σφάλμα: {errs[0]}")
+        elif not new_dfs:
+            st.warning("Δεν βρέθηκαν δεδομένα στα emails.")
+        else:
+            # Βήμα 2: Συνδυάζουμε ΟΛΑ τα νέα (χωρίς merge με παλιά)
+            status.markdown('<div class="info-box">💾 Αποθήκευση στο Google Sheets...</div>', unsafe_allow_html=True)
+            fresh_df = pd.concat(new_dfs, ignore_index=True)
+            fresh_df = fresh_df.dropna(subset=["DATE","VALUE"])
+            fresh_df = fresh_df[fresh_df["VALUE"] > 0]
+            fresh_df = fresh_df.sort_values("DATE", ascending=False).reset_index(drop=True)
+
+            # Γράψε κατευθείαν (αντικαθιστά ό,τι υπάρχει)
+            from gsheets_helper import _ws, INVOICES_SHEET
+            ws = _ws(INVOICES_SHEET)
+            out = fresh_df.copy()
+            out["DATE"] = out["DATE"].astype(str)
+            data = [out.columns.tolist()] + out.fillna("").values.tolist()
+            ws.clear()
+            ws.update(data)
+            load_invoices.clear()
+            prog.progress(100)
+            status.empty()
+            st.success(f"✅ Έγιναν {len(fresh_df)} εγγραφές από {checked} emails. Τα παλιά λανθασμένα δεδομένα διαγράφηκαν.")
+            st.rerun()
+
+    elif run_inc and inv_pw:
+        with st.spinner("Φόρτωση νέων emails..."):
+            new_dfs, errs, checked, _ = fetch_invoices_incremental(inv_pw, full_scan=False)
         if errs:
             st.error(f"❌ Σφάλμα: {errs[0]}")
         elif not new_dfs:
             st.markdown(f'<div class="info-box">✅ Ελέγχθηκαν {checked} emails — δεν βρέθηκαν νέα δεδομένα.</div>', unsafe_allow_html=True)
         else:
             n_new = merge_invoices(new_dfs)
-            load_invoices.clear()  # Καθαρισμός cache αμέσως
-            st.success(f"✅ Ενημερώθηκε! {n_new} νέες γραμμές από {checked} emails — αποθηκεύτηκαν στο Google Sheets.")
+            load_invoices.clear()
+            st.success(f"✅ {n_new} νέες εγγραφές από {checked} emails.")
             st.rerun()
 
-    elif run_dbg and inv_pw:
-        # Διαγνωστικό: δείχνει στήλες + πρώτες 3 γραμμές χωρίς αποθήκευση
-        with st.spinner("Διαγνωστικό ανάγνωση (1 email)..."):
-            new_dfs, errs, checked, debug_cols = fetch_invoices_incremental(
-                inv_pw, full_scan=False, debug=True)
-        if errs:
-            st.error(f"❌ {errs[0]}")
-        elif not debug_cols:
-            st.warning("Δεν βρέθηκαν Excel αρχεία στα τελευταία emails.")
-        else:
-            for fname, cols in list(debug_cols.items())[:2]:
-                st.markdown(f"**📄 {fname}**")
-                st.code("Στήλες: " + " | ".join(cols))
-                val_col = _pick_value_col(cols)
-                st.info(f"Επιλεγμένη στήλη ΑΞΙΑΣ: **{val_col}**")
-            if new_dfs:
-                preview = pd.concat(new_dfs[:1]).head(5)
-                st.dataframe(preview, use_container_width=True)
-
-    elif (run_inc or run_full or run_dbg) and not inv_pw:
+    elif (run_inc or run_fresh) and not inv_pw:
         st.error("Εισάγετε App Password.")
 
     if not df.empty:
