@@ -16,6 +16,48 @@ SALES_SHEET    = "sales"
 INVOICES_SHEET = "invoices"
 
 
+# ── ROBUST NUMBER PARSER ──────────────────────────────────────────────────────
+# CRITICAL FIX: το gspread.get_all_records() γυρνάει τους αριθμούς ως FORMATTED
+# strings σε ελληνικό locale (πχ "406,22" αντί 406.22). Το pd.to_numeric()
+# αποτυγχάνει σε αυτά και επιστρέφει NaN, οπότε το dropna() τα πετάει.
+# Αυτή η συνάρτηση χειρίζεται σωστά όλες τις μορφές:
+#   - Ελληνικά:    "406,22"      → 406.22
+#   - Ελληνικά:    "2.763,73"    → 2763.73   (χιλιάδες + δεκαδικό)
+#   - Αγγλικά:     "2,763.73"    → 2763.73
+#   - Καθαρά:      406.22 (float)→ 406.22
+#   - Κενά/None:   ""/None       → None
+
+def _to_float(v):
+    if v is None:
+        return None
+    if isinstance(v, float) and pd.isna(v):
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    s = str(v).strip().replace("€", "").replace(" ", "").replace("\xa0", "")
+    if not s:
+        return None
+    s = s.rstrip(".,")
+    has_dot   = "." in s
+    has_comma = "," in s
+    if has_dot and has_comma:
+        # Και τα δύο: το δεξιότερο είναι το δεκαδικό
+        if s.rfind(",") > s.rfind("."):
+            # Ελληνικά: 2.763,73 → 2763.73
+            s = s.replace(".", "").replace(",", ".")
+        else:
+            # Αγγλικά: 2,763.73 → 2763.73
+            s = s.replace(",", "")
+    elif has_comma:
+        # Μόνο κόμμα → ελληνικό δεκαδικό
+        s = s.replace(",", ".")
+    # Μόνο τελεία ή τίποτα → άφησέ το, η float() χειρίζεται
+    try:
+        return float(s)
+    except (ValueError, TypeError):
+        return None
+
+
 # ── PEM FIX ───────────────────────────────────────────────────────────────────
 
 def _fix_pem(key: str) -> str:
@@ -102,9 +144,10 @@ def load_sales() -> pd.DataFrame:
             return pd.DataFrame(columns=["date","net_sales","customers","avg_basket"])
         df = pd.DataFrame(rows)
         df["date"]       = pd.to_datetime(df["date"], errors="coerce").dt.date
-        df["net_sales"]  = pd.to_numeric(df["net_sales"],  errors="coerce")
-        df["customers"]  = pd.to_numeric(df["customers"],  errors="coerce")
-        df["avg_basket"] = pd.to_numeric(df["avg_basket"], errors="coerce")
+        # FIX: χρησιμοποιούμε τον robust parser αντί για pd.to_numeric
+        df["net_sales"]  = df["net_sales"].apply(_to_float)
+        df["customers"]  = df["customers"].apply(_to_float)
+        df["avg_basket"] = df["avg_basket"].apply(_to_float)
         df = df.dropna(subset=["date","net_sales"])
         return (df.sort_values("net_sales", ascending=False)
                   .drop_duplicates("date", keep="first")
@@ -182,7 +225,8 @@ def load_invoices() -> pd.DataFrame:
             return pd.DataFrame(columns=["DATE","TYPE","VALUE"])
         df = pd.DataFrame(rows)
         df["DATE"]  = pd.to_datetime(df["DATE"], errors="coerce")
-        df["VALUE"] = pd.to_numeric(df["VALUE"], errors="coerce")
+        # FIX: χρησιμοποιούμε τον robust parser αντί για pd.to_numeric
+        df["VALUE"] = df["VALUE"].apply(_to_float)
         df = df.dropna(subset=["DATE","VALUE"])
         return df.sort_values("DATE", ascending=False).reset_index(drop=True)
     except Exception as e:
