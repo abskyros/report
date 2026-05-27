@@ -8,16 +8,19 @@ st.set_page_config(page_title="Τιμολόγια — AB Σκύρος", page_ico
 
 from gsheets_helper import load_invoices, merge_invoices
 
+# ── CONFIG ────────────────────────────────────────────────────────────────────
 INV_EMAIL_USER   = "abf.skyros@gmail.com"
 INV_EMAIL_SENDER = "Notifications@WeDoConnect.com"
 DEEP_SCAN_YEARS  = 2
 
+# ── SECRETS ───────────────────────────────────────────────────────────────────
 _SECRET_PW = ""
 try:
     _SECRET_PW = st.secrets.get("EMAIL_PASS", "")
 except:
     pass
 
+# ── CSS ───────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
@@ -31,8 +34,10 @@ section[data-testid="stSidebar"]{display:none!important;}
 .ptitle{font-size:1.25rem;font-weight:800;color:#003d6b;}
 .sh{font-size:.58rem;font-weight:700;letter-spacing:.18em;text-transform:uppercase;color:#0369a1;margin:1.8rem 0 .7rem;border-bottom:1px solid #e0f2fe;padding-bottom:.4rem;}
 .kr{display:grid;gap:.75rem;margin:.5rem 0 1.2rem;}
+.kr4{grid-template-columns:repeat(4,1fr);}
 .kr3{grid-template-columns:repeat(3,1fr);}
-@media(max-width:580px){.kr3{grid-template-columns:1fr;}.block-container{padding:1rem 1rem 3rem!important;}}
+@media(max-width:900px){.kr4{grid-template-columns:repeat(2,1fr);}}
+@media(max-width:580px){.kr4,.kr3{grid-template-columns:1fr;}.block-container{padding:1rem 1rem 3rem!important;}}
 .kc{background:#fff;border:1px solid #e0f2fe;border-radius:12px;padding:.9rem 1rem;position:relative;overflow:hidden;box-shadow:0 2px 8px rgba(0,61,107,0.06);}
 .kc::before{content:'';position:absolute;top:0;left:0;bottom:0;width:3px;background:var(--a,#003d6b);}
 .kl{font-size:.58rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#64748b;margin-bottom:.3rem;}
@@ -40,7 +45,10 @@ section[data-testid="stSidebar"]{display:none!important;}
 .kv-green{color:#0369a1;}
 .kv-red{color:#dc2626;}
 .stButton>button{border-radius:9px!important;font-family:'Inter',sans-serif!important;font-size:.82rem!important;font-weight:700!important;padding:.6rem 1rem!important;transition:all .15s!important;}
+.btn-b>button{background:#003d6b!important;border:none!important;color:#fff!important;}
+.btn-b>button:hover{background:#004f8a!important;}
 .btn-back>button{background:#fff!important;border:1px solid #bae6fd!important;color:#003d6b!important;font-weight:700!important;}
+.btn-back>button:hover{background:#e0f2fe!important;}
 [data-baseweb="tab-list"]{background:transparent!important;border-bottom:1px solid #bae6fd!important;gap:.2rem!important;}
 [data-baseweb="tab"]{background:transparent!important;border:none!important;color:#64748b!important;font-size:.74rem!important;font-weight:700!important;letter-spacing:.05em!important;text-transform:uppercase!important;padding:.5rem .9rem!important;border-radius:8px 8px 0 0!important;}
 [aria-selected="true"][data-baseweb="tab"]{color:#003d6b!important;background:#e0f2fe!important;border-bottom:2px solid #003d6b!important;}
@@ -50,19 +58,14 @@ section[data-testid="stSidebar"]{display:none!important;}
 </style>
 """, unsafe_allow_html=True)
 
+# ── HELPERS ───────────────────────────────────────────────────────────────────
 MONTHS_GR = ["Ιαν","Φεβ","Μαρ","Απρ","Μαι","Ιουν","Ιουλ","Αυγ","Σεπ","Οκτ","Νοε","Δεκ"]
 
 def fmt(v):
     if v is None or (isinstance(v, float) and pd.isna(v)): return "—"
+    if v == int(v):
+        return f"{int(v):,}€".replace(",",".")
     return f"{v:,.2f}€".replace(",","X").replace(".",",").replace("X",".")
-
-
-# ── COLUMN DETECTION (same as original working app) ─────────────────────────
-
-def _pick_value_col(columns: list) -> str | None:
-    """Βρίσκει τη στήλη αξίας: ψάχνει για ΑΞΙΑ ή ΣΥΝΟΛΟ (όπως το original)."""
-    return next((c for c in columns if "ΑΞΙΑ" in c.upper() or "ΣΥΝΟΛΟ" in c.upper()), None)
-
 
 def find_header_and_load(file_content, filename):
     try:
@@ -79,22 +82,21 @@ def find_header_and_load(file_content, filename):
         for i in range(min(40, len(df_raw))):
             row_values = [str(x).upper() for x in df_raw.iloc[i].values if pd.notna(x)]
             row_str = " ".join(row_values)
-            if ("ΤΥΠΟΣ" in row_str and "ΗΜΕΡΟΜΗΝΙΑ" in row_str) or                ("ΤΥΠΟΣ ΠΑΡΑΣΤΑΤΙΚΟΥ" in row_str):
+            if "ΤΥΠΟΣ" in row_str and "ΗΜΕΡΟΜΗΝΙΑ" in row_str:
                 header_row_index = i; break
 
-        if header_row_index == -1: return None, []
+        if header_row_index == -1: return None
 
-        headers = [str(h).strip().upper() for h in df_raw.iloc[header_row_index]]
         df = df_raw.iloc[header_row_index + 1:].copy()
+        headers = [str(h).strip().upper() for h in df_raw.iloc[header_row_index]]
         df.columns = headers
         df = df.loc[:, df.columns.notna()]
         df = df.loc[:, ~df.columns.str.contains('NAN|UNNAMED', case=False)]
-        return df.reset_index(drop=True), list(headers)
+        return df.reset_index(drop=True)
     except:
-        return None, []
+        return None
 
-
-def fetch_invoices_incremental(password, full_scan=False, debug=False):
+def fetch_invoices_incremental(password, full_scan=False):
     df_existing = load_invoices()
     cutoff_dt   = None
 
@@ -105,7 +107,6 @@ def fetch_invoices_incremental(password, full_scan=False, debug=False):
     new_rows       = []
     errors         = []
     emails_checked = 0
-    debug_cols     = {}  # filename → columns found
 
     try:
         with MailBox("imap.gmail.com").login(INV_EMAIL_USER, password) as mb:
@@ -127,52 +128,42 @@ def fetch_invoices_incremental(password, full_scan=False, debug=False):
                     if not (fname.endswith('.xlsx') or fname.endswith('.xls') or fname.endswith('.csv')):
                         continue
                     emails_checked += 1
-                    df_parsed, all_cols = find_header_and_load(att.payload, att.filename)
+                    df_parsed = find_header_and_load(att.payload, att.filename)
                     if df_parsed is None: continue
 
-                    # Αποθήκευσε στήλες για debug
-                    if debug and att.filename not in debug_cols:
-                        debug_cols[att.filename] = all_cols
+                    col_map = {}
+                    for c in df_parsed.columns:
+                        cu = c.upper()
+                        if "ΤΥΠΟΣ" in cu: col_map[c] = "TYPE"
+                        elif "ΗΜΕΡΟΜΗΝΙΑ" in cu: col_map[c] = "DATE"
+                        elif "ΑΞΙΑ" in cu or "VALUE" in cu or "ΠΟΣΟ" in cu: col_map[c] = "VALUE"
+                    df_parsed = df_parsed.rename(columns=col_map)
 
-                    # Χαρτογράφηση στηλών
-                    # Εύρεση στηλών (ίδια λογική με original working app)
-                    col_date  = next((c for c in df_parsed.columns if "ΗΜΕΡΟΜΗΝΙΑ" in c.upper()), None)
-                    col_type  = next((c for c in df_parsed.columns if "ΤΥΠΟΣ" in c.upper()), None)
-                    col_value = _pick_value_col(list(df_parsed.columns))
-
-                    if not all([col_date, col_type, col_value]):
+                    if not all(c in df_parsed.columns for c in ["DATE","TYPE","VALUE"]):
                         continue
 
-                    df_parsed = df_parsed[[col_date, col_type, col_value]].copy()
-                    df_parsed.columns = ["DATE", "TYPE", "VALUE"]
-                    df_parsed["DATE"] = pd.to_datetime(df_parsed["DATE"], errors="coerce", dayfirst=True)
-                    # Ακριβώς η ίδια λογική με το original working app:
-                    if df_parsed["VALUE"].dtype == object:
-                        df_parsed["VALUE"] = (df_parsed["VALUE"].astype(str)
-                                              .str.replace("€", "", regex=False)
-                                              .str.replace(",", ".", regex=False)
-                                              .str.strip())
-                    df_parsed["VALUE"] = pd.to_numeric(df_parsed["VALUE"], errors="coerce").fillna(0)
-                    df_parsed = df_parsed.dropna(subset=["DATE"])
-                    df_parsed = df_parsed[df_parsed["VALUE"] > 0]
-
+                    df_parsed = df_parsed[["DATE","TYPE","VALUE"]].copy()
+                    df_parsed["DATE"]  = pd.to_datetime(df_parsed["DATE"], errors="coerce", dayfirst=True)
+                    df_parsed["VALUE"] = pd.to_numeric(df_parsed["VALUE"], errors="coerce")
+                    df_parsed = df_parsed.dropna(subset=["DATE","VALUE"])
                     if not df_parsed.empty:
                         new_rows.append(df_parsed)
     except Exception as e:
         errors.append(str(e))
 
-    return new_rows, errors, emails_checked, debug_cols
-
+    return new_rows, errors, emails_checked
 
 def get_week_range(d):
     start = d - timedelta(days=d.weekday())
     return start, start + timedelta(days=6)
 
-# ── LOAD DATA ──────────────────────────────────────────────────────────────────
+# ── LOAD DATA ─────────────────────────────────────────────────────────────────
 df    = load_invoices()
 today = date.today()
 
 import time as _time
+# Auto-sync αφαιρέθηκε — έκανε IMAP requests στο page load.
+# Ενημέρωση μόνο από την καρτέλα "Ενημέρωση".
 
 # ── RENDER ────────────────────────────────────────────────────────────────────
 st.markdown("""
@@ -190,19 +181,12 @@ with col_back:
 
 tab_week, tab_month, tab_update = st.tabs(["📅 Εβδομαδιαία", "📆 Μηνιαία", "🔄 Ενημέρωση"])
 
+# ═══════════════════════════════════════════════════════════════════════════════
 with tab_week:
     if df.empty:
         st.markdown('<div class="warn-box">⚠️ Δεν υπάρχουν δεδομένα. Μεταβείτε στην καρτέλα <b>Ενημέρωση</b>.</div>', unsafe_allow_html=True)
     else:
-        col_r1, col_r2 = st.columns([4,1])
-        with col_r1:
-            sel_date = st.date_input("Επίλεξε ημέρα για εβδομάδα:", today)
-        with col_r2:
-            st.markdown("<div style='margin-top:28px'>", unsafe_allow_html=True)
-            if st.button("🔄", help="Ανανέωση δεδομένων", key="ref_w"):
-                load_invoices.clear()
-                st.rerun()
-            st.markdown("</div>", unsafe_allow_html=True)
+        sel_date = st.date_input("Επίλεξε ημέρα για εβδομάδα:", today)
         ws_dt    = datetime.combine(sel_date, datetime.min.time())
         start_w, end_w = get_week_range(ws_dt)
         st.markdown(f'<div class="info-box">📅 Εβδομάδα: <b>{start_w.strftime("%d/%m/%Y")}</b> — <b>{end_w.strftime("%d/%m/%Y")}</b></div>', unsafe_allow_html=True)
@@ -214,61 +198,64 @@ with tab_week:
             inv_w = w_df[~w_df["TYPE"].str.contains("ΠΙΣΤΩΤΙΚΟ", na=False)]["VALUE"].sum()
             crd_w = w_df[ w_df["TYPE"].str.contains("ΠΙΣΤΩΤΙΚΟ", na=False)]["VALUE"].sum()
             net_w = inv_w - crd_w
+
             st.markdown(f"""<div class="kr kr3">
               <div class="kc" style="--a:#6b8fd4"><div class="kl">Τιμολόγια Εβδ.</div><div class="kv">{fmt(inv_w)}</div></div>
               <div class="kc" style="--a:#c04a4a"><div class="kl">Πιστωτικά Εβδ.</div><div class="kv kv-red">{fmt(crd_w)}</div></div>
               <div class="kc" style="--a:#5a9f7a"><div class="kl">Καθαρό Σύνολο</div><div class="kv kv-green">{fmt(net_w)}</div></div>
             </div>""", unsafe_allow_html=True)
+
             disp = w_df.copy()
-            disp["DATE"]  = disp["DATE"].dt.strftime("%d/%m/%Y")
-            disp["VALUE"] = disp["VALUE"].apply(fmt)
+            disp["DATE"] = disp["DATE"].dt.strftime("%d/%m/%Y %H:%M")
             st.dataframe(
-                disp.rename(columns={"DATE":"ΗΜΕΡΟΜΗΝΙΑ","TYPE":"ΤΥΠΟΣ","VALUE":"ΑΞΙΑ"}),
+                disp.rename(columns={"DATE":"ΗΜΕΡΟΜΗΝΙΑ","TYPE":"ΤΥΠΟΣ","VALUE":"ΑΞΙΑ"})
+                    .style.format({"ΑΞΙΑ": lambda v: fmt(v) if pd.notna(v) else "—"}),
                 use_container_width=True, hide_index=True)
         else:
             st.markdown('<div class="warn-box">Δεν υπάρχουν εγγραφές για αυτή την εβδομάδα.</div>', unsafe_allow_html=True)
 
+# ═══════════════════════════════════════════════════════════════════════════════
 with tab_month:
     if df.empty:
         st.markdown('<div class="warn-box">⚠️ Δεν υπάρχουν δεδομένα.</div>', unsafe_allow_html=True)
     else:
-        col_a, col_b, col_c = st.columns([3,2,1])
+        col_a, col_b = st.columns(2)
         with col_a:
             s_m = st.selectbox("Μήνας", range(1,13), format_func=lambda x: MONTHS_GR[x-1], index=today.month-1)
         with col_b:
             available_years = sorted(df["DATE"].dt.year.unique(), reverse=True)
             s_y = st.selectbox("Έτος", available_years)
-        with col_c:
-            st.markdown("<div style='margin-top:28px'>", unsafe_allow_html=True)
-            if st.button("🔄", help="Ανανέωση δεδομένων", key="ref_m"):
-                load_invoices.clear()
-                st.rerun()
-            st.markdown("</div>", unsafe_allow_html=True)
+
         mask_m = (df["DATE"].dt.month == s_m) & (df["DATE"].dt.year == s_y)
         m_df   = df[mask_m]
+
         if not m_df.empty:
             inv_m = m_df[~m_df["TYPE"].str.contains("ΠΙΣΤΩΤΙΚΟ", na=False)]["VALUE"].sum()
             crd_m = m_df[ m_df["TYPE"].str.contains("ΠΙΣΤΩΤΙΚΟ", na=False)]["VALUE"].sum()
             net_m = inv_m - crd_m
+
             st.markdown(f"""<div class="kr kr3">
               <div class="kc" style="--a:#6b8fd4"><div class="kl">Τιμολόγια Μήνα</div><div class="kv">{fmt(inv_m)}</div></div>
               <div class="kc" style="--a:#c04a4a"><div class="kl">Πιστωτικά Μήνα</div><div class="kv kv-red">{fmt(crd_m)}</div></div>
               <div class="kc" style="--a:#5a9f7a"><div class="kl">Καθαρό Μήνα</div><div class="kv kv-green">{fmt(net_m)}</div></div>
             </div>""", unsafe_allow_html=True)
+
             disp = m_df.copy()
-            disp["DATE"]  = disp["DATE"].dt.strftime("%d/%m/%Y")
-            disp["VALUE"] = disp["VALUE"].apply(fmt)
+            disp["DATE"] = disp["DATE"].dt.strftime("%d/%m/%Y %H:%M")
             st.dataframe(
-                disp.rename(columns={"DATE":"ΗΜΕΡΟΜΗΝΙΑ","TYPE":"ΤΥΠΟΣ","VALUE":"ΑΞΙΑ"}),
+                disp.rename(columns={"DATE":"ΗΜΕΡΟΜΗΝΙΑ","TYPE":"ΤΥΠΟΣ","VALUE":"ΑΞΙΑ"})
+                    .style.format({"ΑΞΙΑ": lambda v: fmt(v) if pd.notna(v) else "—"}),
                 use_container_width=True, hide_index=True)
+
             csv = m_df.rename(columns={"DATE":"ΗΜΕΡΟΜΗΝΙΑ","TYPE":"ΤΥΠΟΣ","VALUE":"ΑΞΙΑ"}).to_csv(index=False).encode("utf-8-sig")
             st.download_button(f"📥 Λήψη {MONTHS_GR[s_m-1]} {s_y} CSV", csv, f"invoices_{s_y}_{s_m:02d}.csv", "text/csv")
         else:
             st.markdown('<div class="warn-box">Δεν υπάρχουν εγγραφές για αυτόν τον μήνα.</div>', unsafe_allow_html=True)
 
+# ═══════════════════════════════════════════════════════════════════════════════
 with tab_update:
     st.markdown('<div class="sh">Σύνδεση Email</div>', unsafe_allow_html=True)
-    st.markdown(f'<div class="info-box">📧 Λογαριασμός: <b>{INV_EMAIL_USER}</b> — Αποστολέας: <b>{INV_EMAIL_SENDER}</b></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="info-box">📧 Λογαριασμός: <b>{INV_EMAIL_USER}</b> — Αποστολέας: <b>{INV_EMAIL_SENDER}</b><br>Χρησιμοποιήστε <b>App Password</b> του Gmail.</div>', unsafe_allow_html=True)
 
     if _SECRET_PW:
         st.markdown('<div class="info-box">🔐 App Password φορτώθηκε αυτόματα από Streamlit Secrets.</div>', unsafe_allow_html=True)
@@ -278,60 +265,23 @@ with tab_update:
         inv_pw = st.text_input("🔐 Gmail App Password", type="password", key="inv_pw")
 
     col_inc, col_full = st.columns(2)
-    run_inc   = col_inc.button("⚡ Γρήγορη (Νέα μόνο)",              use_container_width=True)
-    run_fresh = col_full.button("🗑️ Καθαρισμός + Πλήρης Επαναφόρτωση", use_container_width=True,
-                                 help="Σβήνει ΟΛΑ τα παλιά δεδομένα και ξαναδιαβάζει από 0")
+    run_inc  = col_inc.button("⚡ Γρήγορη Ενημέρωση (Νέα μόνο)", use_container_width=True)
+    run_full = col_full.button("🔍 Βαθιά Σάρωση (2 χρόνια)",     use_container_width=True)
 
-    if run_fresh and inv_pw:
-        st.markdown('<div class="warn-box">⏳ Σβήνω παλιά δεδομένα και φορτώνω εκ νέου...</div>', unsafe_allow_html=True)
-        prog = st.progress(0)
-        status = st.empty()
-
-        # Βήμα 1: Διαβάζουμε ΟΛΑ τα emails
-        status.markdown('<div class="info-box">📧 Σύνδεση & ανάγνωση emails (2 χρόνια)...</div>', unsafe_allow_html=True)
-        new_dfs, errs, checked, _ = fetch_invoices_incremental(inv_pw, full_scan=True)
-        prog.progress(50)
-
-        if errs:
-            st.error(f"❌ Σφάλμα: {errs[0]}")
-        elif not new_dfs:
-            st.warning("Δεν βρέθηκαν δεδομένα στα emails.")
-        else:
-            # Βήμα 2: Συνδυάζουμε ΟΛΑ τα νέα (χωρίς merge με παλιά)
-            status.markdown('<div class="info-box">💾 Αποθήκευση στο Google Sheets...</div>', unsafe_allow_html=True)
-            fresh_df = pd.concat(new_dfs, ignore_index=True)
-            fresh_df = fresh_df.dropna(subset=["DATE","VALUE"])
-            fresh_df = fresh_df[fresh_df["VALUE"] > 0]
-            fresh_df = fresh_df.sort_values("DATE", ascending=False).reset_index(drop=True)
-
-            # Γράψε κατευθείαν (αντικαθιστά ό,τι υπάρχει)
-            from gsheets_helper import _ws, INVOICES_SHEET
-            ws = _ws(INVOICES_SHEET)
-            out = fresh_df.copy()
-            out["DATE"] = out["DATE"].astype(str)
-            data = [out.columns.tolist()] + out.fillna("").values.tolist()
-            ws.clear()
-            ws.update(data)
-            load_invoices.clear()
-            prog.progress(100)
-            status.empty()
-            st.success(f"✅ Έγιναν {len(fresh_df)} εγγραφές από {checked} emails. Τα παλιά λανθασμένα δεδομένα διαγράφηκαν.")
-            st.rerun()
-
-    elif run_inc and inv_pw:
-        with st.spinner("Φόρτωση νέων emails..."):
-            new_dfs, errs, checked, _ = fetch_invoices_incremental(inv_pw, full_scan=False)
+    if (run_inc or run_full) and inv_pw:
+        lbl = "Βαθιά σάρωση 2 ετών..." if run_full else "Φόρτωση νέων emails..."
+        with st.spinner(lbl):
+            new_dfs, errs, checked = fetch_invoices_incremental(inv_pw, full_scan=run_full)
         if errs:
             st.error(f"❌ Σφάλμα: {errs[0]}")
         elif not new_dfs:
             st.markdown(f'<div class="info-box">✅ Ελέγχθηκαν {checked} emails — δεν βρέθηκαν νέα δεδομένα.</div>', unsafe_allow_html=True)
         else:
             n_new = merge_invoices(new_dfs)
-            load_invoices.clear()
-            st.success(f"✅ {n_new} νέες εγγραφές από {checked} emails.")
+            st.success(f"✅ Ενημερώθηκε! {n_new} νέες γραμμές από {checked} emails — αποθηκεύτηκαν στο Google Sheets.")
             st.rerun()
 
-    elif (run_inc or run_fresh) and not inv_pw:
+    elif (run_inc or run_full) and not inv_pw:
         st.error("Εισάγετε App Password.")
 
     if not df.empty:
