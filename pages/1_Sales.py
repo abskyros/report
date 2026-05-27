@@ -70,9 +70,10 @@ MONTHS_GR = ["Ιαν","Φεβ","Μαρ","Απρ","Μαι","Ιουν","Ιουλ",
 
 def fmt(v):
     if v is None or (isinstance(v, float) and pd.isna(v)): return "—"
-    if v == int(v):
-        return f"{int(v):,}€".replace(",",".")
-    return f"{v:,.2f}€".replace(",","X").replace(".",",").replace("X",".")
+    rounded = round(float(v), 2)
+    if rounded == int(rounded):
+        return f"{int(rounded):,}€".replace(",",".")
+    return f"{rounded:,.2f}€".replace(",","X").replace(".",",").replace("X",".")
 
 def get_week_range(d):
     start = d - timedelta(days=d.weekday())

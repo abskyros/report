@@ -63,9 +63,10 @@ MONTHS_GR = ["Ιαν","Φεβ","Μαρ","Απρ","Μαι","Ιουν","Ιουλ",
 
 def fmt(v):
     if v is None or (isinstance(v, float) and pd.isna(v)): return "—"
-    if v == int(v):
-        return f"{int(v):,}€".replace(",",".")
-    return f"{v:,.2f}€".replace(",","X").replace(".",",").replace("X",".")
+    rounded = round(float(v), 2)
+    if rounded == int(rounded):
+        return f"{int(rounded):,}€".replace(",",".")
+    return f"{rounded:,.2f}€".replace(",","X").replace(".",",").replace("X",".")
 
 def find_header_and_load(file_content, filename):
     try:
@@ -96,12 +97,19 @@ def find_header_and_load(file_content, filename):
     except:
         return None
 
+def _naive(dt):
+    """Αφαιρεί το timezone από datetime για ασφαλή σύγκριση."""
+    if dt is None: return None
+    if hasattr(dt, 'tzinfo') and dt.tzinfo is not None:
+        return dt.replace(tzinfo=None)
+    return dt
+
 def fetch_invoices_incremental(password, full_scan=False):
     df_existing = load_invoices()
     cutoff_dt   = None
 
     if not full_scan and not df_existing.empty:
-        last_dt   = df_existing["DATE"].max()
+        last_dt   = _naive(df_existing["DATE"].max())
         cutoff_dt = last_dt - timedelta(days=5)
 
     new_rows       = []
@@ -114,7 +122,7 @@ def fetch_invoices_incremental(password, full_scan=False):
             messages = list(mb.fetch(criteria, limit=500 if full_scan else 50, reverse=True))
 
             for msg in messages:
-                msg_date = msg.date
+                msg_date = _naive(msg.date)
                 if not full_scan and cutoff_dt and msg_date and msg_date < cutoff_dt:
                     continue
                 if full_scan:
