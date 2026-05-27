@@ -78,6 +78,8 @@ MON  = ["Ιαν","Φεβ","Μαρ","Απρ","Μαΐ","Ιουν","Ιουλ","Αυ
 
 def fmt(v):
     if v is None or (isinstance(v, float) and pd.isna(v)): return "—"
+    if v == int(v):
+        return f"{int(v):,} €".replace(",",".")
     return f"{v:,.2f} €".replace(",","X").replace(".",",").replace("X",".")
 
 today    = date.today()
