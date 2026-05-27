@@ -156,15 +156,14 @@ def extract(pdf_bytes: bytes) -> dict:
 
         txt_all = "\n".join(pages)
 
-        # ── ΗΜΕΡΟΜΗΝΙΑ: "Run On: DD/MM/YYYY" → αφαιρούμε 1 μέρα ──────────────
+        # ── ΗΜΕΡΟΜΗΝΙΑ: "Run On: DD/MM/YYYY" = άμεσα η ημερομηνία πωλήσεων ───
         m = re.search(r'[Rr]un\s+[Oo0]n\s*[:\s]+(\d{1,2})[/.](\d{1,2})[/.](\d{4})', txt_all)
         if m:
             try:
-                run_date = date(int(m.group(3)), int(m.group(2)), int(m.group(1)))
-                r["date"] = run_date - timedelta(days=1)
+                r["date"] = date(int(m.group(3)), int(m.group(2)), int(m.group(1)))
             except: pass
 
-        # Fallback: "For DD/MM/YYYY" στο Department Report
+        # Fallback: "For DD/MM/YYYY" αν δεν βρεθεί Run On
         if not r["date"]:
             m = re.search(r'\bFor\s+(\d{1,2})[/.](\d{1,2})[/.](\d{4})', txt_all, re.IGNORECASE)
             if m:
