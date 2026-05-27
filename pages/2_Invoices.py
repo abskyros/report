@@ -61,6 +61,31 @@ section[data-testid="stSidebar"]{display:none!important;}
 # ── HELPERS ───────────────────────────────────────────────────────────────────
 MONTHS_GR = ["Ιαν","Φεβ","Μαρ","Απρ","Μαι","Ιουν","Ιουλ","Αυγ","Σεπ","Οκτ","Νοε","Δεκ"]
 
+def _naive(dt):
+    """Αφαιρεί timezone από datetime για ασφαλή σύγκριση."""
+    if dt is None: return None
+    if hasattr(dt, 'tzinfo') and dt.tzinfo is not None:
+        return dt.replace(tzinfo=None)
+    return dt
+
+def _robust_num(v):
+    """Parser για ελληνικούς/αγγλικούς αριθμούς (πχ '1.254,88' ή '1,254.88')."""
+    if v is None: return None
+    if isinstance(v, float) and pd.isna(v): return None
+    if isinstance(v, (int, float)): return float(v)
+    s = str(v).strip().replace("€","").replace(" ","").replace("\xa0","").rstrip(".,")
+    if not s: return None
+    has_dot, has_comma = "." in s, "," in s
+    if has_dot and has_comma:
+        if s.rfind(",") > s.rfind("."):
+            s = s.replace(".", "").replace(",", ".")
+        else:
+            s = s.replace(",", "")
+    elif has_comma:
+        s = s.replace(",", ".")
+    try: return float(s)
+    except: return None
+
 def fmt(v):
     if v is None or (isinstance(v, float) and pd.isna(v)): return "—"
     rounded = round(float(v), 2)
@@ -83,7 +108,11 @@ def find_header_and_load(file_content, filename):
         for i in range(min(40, len(df_raw))):
             row_values = [str(x).upper() for x in df_raw.iloc[i].values if pd.notna(x)]
             row_str = " ".join(row_values)
-            if "ΤΥΠΟΣ" in row_str and "ΗΜΕΡΟΜΗΝΙΑ" in row_str:
+            # Υποστήριξη τόσο για "ΤΥΠΟΣ" όσο και για "ΤΥΠΟΣ ΠΑΡΑΣΤΑΤΙΚΟΥ"
+            has_type = "ΤΥΠΟΣ" in row_str
+            has_date = "ΗΜΕΡΟΜΗΝΙΑ" in row_str
+            has_val  = any(x in row_str for x in ["ΑΞΙΑ", "VALUE", "ΠΟΣΟ", "ΣΥΝΟΛ"])
+            if has_type and has_date:
                 header_row_index = i; break
 
         if header_row_index == -1: return None
@@ -98,7 +127,7 @@ def find_header_and_load(file_content, filename):
         return None
 
 def _naive(dt):
-    """Αφαιρεί το timezone από datetime για ασφαλή σύγκριση."""
+    """Αφαιρεί timezone από datetime για ασφαλή σύγκριση."""
     if dt is None: return None
     if hasattr(dt, 'tzinfo') and dt.tzinfo is not None:
         return dt.replace(tzinfo=None)
@@ -142,9 +171,14 @@ def fetch_invoices_incremental(password, full_scan=False):
                     col_map = {}
                     for c in df_parsed.columns:
                         cu = c.upper()
-                        if "ΤΥΠΟΣ" in cu: col_map[c] = "TYPE"
-                        elif "ΗΜΕΡΟΜΗΝΙΑ" in cu: col_map[c] = "DATE"
-                        elif "ΑΞΙΑ" in cu or "VALUE" in cu or "ΠΟΣΟ" in cu: col_map[c] = "VALUE"
+                        # Υποστήριξη πλήρων ονομάτων: ΤΥΠΟΣ ΠΑΡΑΣΤΑΤΙΚΟΥ, ΗΜΕΡΟΜΗΝΙΑ ΠΑΡΑΣΤΑΤΙΚΟΥ, ΣΥΝΟΛΙΚΗ ΑΞΙΑ
+                        if "ΤΥΠΟΣ" in cu and "TYPE" not in col_map.values():
+                            col_map[c] = "TYPE"
+                        elif "ΗΜΕΡΟΜΗΝΙΑ" in cu and "DATE" not in col_map.values():
+                            col_map[c] = "DATE"
+                        elif ("ΣΥΝΟΛΙΚΗ" in cu and "ΑΞΙΑ" in cu) or "ΑΞΙΑ" in cu or "VALUE" in cu or "ΠΟΣΟ" in cu:
+                            if "VALUE" not in col_map.values():
+                                col_map[c] = "VALUE"
                     df_parsed = df_parsed.rename(columns=col_map)
 
                     if not all(c in df_parsed.columns for c in ["DATE","TYPE","VALUE"]):
@@ -152,7 +186,8 @@ def fetch_invoices_incremental(password, full_scan=False):
 
                     df_parsed = df_parsed[["DATE","TYPE","VALUE"]].copy()
                     df_parsed["DATE"]  = pd.to_datetime(df_parsed["DATE"], errors="coerce", dayfirst=True)
-                    df_parsed["VALUE"] = pd.to_numeric(df_parsed["VALUE"], errors="coerce")
+                    # Robust parser για ελληνικούς αριθμούς (πχ "1.254,88")
+                    df_parsed["VALUE"] = df_parsed["VALUE"].apply(_robust_num)
                     df_parsed = df_parsed.dropna(subset=["DATE","VALUE"])
                     if not df_parsed.empty:
                         new_rows.append(df_parsed)
@@ -287,6 +322,7 @@ with tab_update:
         else:
             n_new = merge_invoices(new_dfs)
             st.success(f"✅ Ενημερώθηκε! {n_new} νέες γραμμές από {checked} emails — αποθηκεύτηκαν στο Google Sheets.")
+            st.cache_data.clear()  # Καθαρίζει cache ώστε όλες οι σελίδες να δουν τα νέα δεδομένα
             st.rerun()
 
     elif (run_inc or run_full) and not inv_pw:

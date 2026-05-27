@@ -197,7 +197,11 @@ def fetch(pw, since: date | None = None, want_records: int = 60, email_scan_limi
         with MailBox("imap.gmail.com").login(SALES_EMAIL_USER, pw) as mb:
             for msg in mb.fetch(AND(from_=SALES_EMAIL_SENDER), limit=email_scan_limit, reverse=True, mark_seen=False):
                 if len(recs) >= want_records: break
-                d = msg.date.date() if msg.date else None
+                # Fix timezone: msg.date μπορεί να είναι timezone-aware
+                msg_dt = msg.date
+                if msg_dt and hasattr(msg_dt, 'tzinfo') and msg_dt.tzinfo is not None:
+                    msg_dt = msg_dt.replace(tzinfo=None)
+                d = msg_dt.date() if msg_dt else None
                 if since and d and d < since: continue
                 if not _is_valid(msg.subject): continue
                 pdf = next((a for a in msg.attachments if a.filename and a.filename.lower().endswith(".pdf")), None)
@@ -380,6 +384,7 @@ with tab_update:
                     use_container_width=True, hide_index=True)
                 saved = merge_sales(recs)
                 st.info(f"💾 Αποθηκεύτηκαν {saved} νέες εγγραφές στο Google Sheets.")
+                st.cache_data.clear()
                 if st.button("🔄 Ανανέωση Γραφημάτων", use_container_width=True):
                     st.rerun()
             else:
@@ -396,6 +401,7 @@ with tab_update:
             saved = merge_sales(recs)
             if saved > 0:
                 st.success(f"✅ Ενημερώθηκε! {saved} νέες εγγραφές από {n_checked} PDF.")
+                st.cache_data.clear()
                 st.rerun()
             else:
                 st.markdown(f'<div class="info-box">✅ Ελέγχθηκαν {n_checked} αρχεία PDF — δεν βρέθηκαν νέα δεδομένα.</div>', unsafe_allow_html=True)
@@ -424,6 +430,7 @@ with tab_update:
             if s["ok"]:
                 prog_bar.progress(100)
                 st.success(f"✅ Ολοκληρώθηκε! {s['total']} emails → {s['saved']} εγγραφές στο Google Sheets.")
+                st.cache_data.clear()
                 break
 
     elif (run_test or run_inc or run_full) and not sales_pw:
